@@ -7,9 +7,27 @@ Sends through MXRoute over SMTP. Applications never see SMTP credentials.
 
 ## Status
 
-**Phase 1 of 8 — foundation.** Schema, config, health endpoints, and container
-setup. Not yet able to send: the ingest API lands in Phase 4 and the delivery
-worker in Phase 5. See `build_plan.md`.
+**Phase 2 of 9 — control plane.** Schema, config, health endpoints, container
+setup, and the full domain/mailbox lifecycle against the live MXRoute API.
+
+Still cannot send: the ingest API lands in Phase 4 and the delivery worker in
+Phase 5. See `build_plan.md`.
+
+Working today, via the admin CLI:
+
+```bash
+python -m emaild.admin domains token          # ownership TXT record
+python -m emaild.admin domains add example.com
+python -m emaild.admin domains records example.com   # exact DNS to publish
+python -m emaild.admin domains verify                # re-check and update state
+python -m emaild.admin mailboxes provision noreply@example.com
+python -m emaild.admin projects create billing
+python -m emaild.admin keys create billing-prod --project billing \
+    --mailbox noreply@example.com
+```
+
+The CLI is `role=admin` — the only surface holding the MXRoute account-root
+credential, and never routed through the tunnel.
 
 ## Documents
 

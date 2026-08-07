@@ -13,6 +13,7 @@ is only documented is a convention that eventually gets violated.
 from __future__ import annotations
 
 import enum
+import os
 from functools import lru_cache
 
 from pydantic import Field, ValidationInfo, field_validator, model_validator
@@ -32,10 +33,32 @@ class Environment(str, enum.Enum):
     PRODUCTION = "production"
 
 
+def _env_file_for_process() -> str | None:
+    """Which .env file this process should read, if any.
+
+    `.env` holds every variable for every role, because Docker Compose reads it
+    to build each service's environment. But Settings reads that same file
+    directly when run on the host -- which means a host-side `role=worker` would
+    pick up the MXRoute admin key out of the shared file and be refused by the
+    scoping guard, even though the real worker container never receives it.
+
+    So the file is selectable:
+      EMAILD_ENV_FILE=none          -- read the process environment only
+      EMAILD_ENV_FILE=.env.worker   -- read a role-scoped file
+      (unset)                       -- read .env, the compose/admin default
+    """
+    override = os.environ.get("EMAILD_ENV_FILE")
+    if override is None:
+        return ".env"
+    if override.strip().lower() in ("", "none", "0", "false"):
+        return None
+    return override
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="EMAILD_",
-        env_file=".env",
+        env_file=_env_file_for_process(),
         env_file_encoding="utf-8",
         extra="ignore",
     )

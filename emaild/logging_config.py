@@ -92,3 +92,7 @@ def configure_logging(level: str = "INFO") -> None:
     # SQLAlchemy echo would put bodies and credentials into logs. Keep it off
     # regardless of root level.
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    # httpx logs a line per request at INFO, which buries CLI output and adds
+    # nothing we do not already log ourselves with more context.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
