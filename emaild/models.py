@@ -132,6 +132,33 @@ class SuppressionSource(str, enum.Enum):
 # ---------------------------------------------------------------------------
 
 
+class Installation(Base):
+    """Installation identity. Exactly one row, created once, never regenerated.
+
+    Required by first_production_packaging §10. It must survive upgrades, backup,
+    and restore, and it goes into the backup manifest so a restored backup can be
+    matched to the installation it came from.
+
+    Added in Phase 1 deliberately: generating this later would mean either a
+    backfill against live installations or an identity that changes on upgrade,
+    and §9 is explicit that generated identifiers are created once and preserved.
+    Deliberately carries no hostname, IP, or personal information.
+    """
+
+    __tablename__ = "installation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    installation_id: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    installed_at: Mapped[datetime] = _now_col()
+    installed_version: Mapped[str] = mapped_column(String(40), nullable=False)
+
+    __table_args__ = (
+        # Belt and braces: the primary key is pinned to 1 so a second row is a
+        # constraint violation rather than a silently ambiguous identity.
+        CheckConstraint("id = 1", name="ck_installation_single_row"),
+    )
+
+
 class Project(Base):
     """A product that sends mail. Internal-only: created administratively."""
 

@@ -43,6 +43,11 @@ USER emaild
 ARG APP_VERSION=0.1.0
 ARG GIT_COMMIT=unknown
 ARG BUILD_TIME=unknown
+
+# Surfaced through /version so a running container is traceable to its source.
+ENV EMAILD_GIT_COMMIT=${GIT_COMMIT} \
+    EMAILD_BUILD_TIME=${BUILD_TIME}
+
 LABEL org.opencontainers.image.title="emaild" \
       org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.revision="${GIT_COMMIT}" \

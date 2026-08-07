@@ -201,6 +201,57 @@ Domain list with lifecycle state and missing DNS records. Message search with ti
 
 ---
 
+## Phase 9 — Production packaging
+
+Governed by `release_rules/first_production_packaging.md`. Not started; listed so
+Phases 2–8 build toward it instead of being retrofitted.
+
+That document is explicit (§2, §28) that the audit comes **before** broad
+implementation, so Phase 9 opens with five documents grounded in the actual repo,
+not with code: `distribution_audit.md`, `production_packaging_plan.md`,
+`persistent_data_inventory.md`, `configuration_inventory.md`,
+`migration_risk_assessment.md`. Then work orders 2–12.
+
+### Already satisfied in Phase 1
+
+| Requirement | Where |
+|---|---|
+| §6 `.dockerignore`, multi-stage, non-root, no secrets in image | `Dockerfile`, `.dockerignore` |
+| §10 installation identity, created once, survives upgrade | `installation` table |
+| §11 Postgres persistence, health check, no public port | `docker-compose.yml` |
+| §12 explicit ordered migrations, immutable once released | Alembic; upgrade tested with live data |
+| §13 `/health/live`, `/health/ready`, `/version` + commit/build time | `emaild/health.py` |
+| §15 stdout logging, no secrets | `emaild/logging_config.py` |
+| §9 secrets outside the image, validated at startup | `emaild/config.py` |
+
+### Deliberately deferred
+
+- **§8 production compose from published images.** The current file uses
+  `build:`, which is right for development and explicitly wrong for production.
+  Phase 9 adds `deploy/compose.yaml` pinned to `ghcr.io/soupnchill/emaild:X.Y.Z`.
+- **§16 `appctl`** — start/stop/status/version/health/logs/config-check/backup/
+  restore/doctor.
+- **§17–18 backup and restore**, with manifest and checksums. §24 requires
+  restore onto a *clean* machine; a restore that only works on the original host
+  does not count.
+- **§21 GitHub Actions.** PR validation plus a separately authorised release
+  workflow. Not added yet on purpose: §54 forbids shipping commands that have not
+  been tested, and CI cannot be honestly tested from here before there is
+  something for it to run.
+
+### Constraints this imposes on earlier phases
+
+1. **Phase 5 worker must shut down gracefully (§14).** Stop claiming new work on
+   SIGTERM, finish or safely release in-flight messages, exit within a documented
+   timeout. A worker killed mid-send must leave the message claimable by the
+   reaper, never silently lost.
+2. **Nothing irreplaceable outside the Postgres volume (§5).** Everything must be
+   reachable by `pg_dump` plus the encryption key — no state in container layers,
+   temp dirs, or the source checkout.
+3. **No hard-coded production hostnames (§20).** The base URL is configuration.
+4. **One authoritative version string (§22).** `emaild/__init__.py`, referenced
+   by the image, `/version`, and the backup manifest.
+
 ## Sequence
 
 ```
