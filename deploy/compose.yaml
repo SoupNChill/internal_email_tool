@@ -1,0 +1,120 @@
+# emaild -- production deployment.
+#
+# This file is what runs on the destination host. It differs from the repository
+# root's docker-compose.yml in three ways that matter (§8):
+#
+#   1. No `build:`. Production must never compile on the destination server.
+#   2. Images are pinned to an exact version, never `latest`.
+#   3. EMAILD_ENV is hardcoded to production, not read from .env. A deployment
+#      IS production by definition, and leaving it configurable is how an
+#      unauthenticated dashboard ends up on a LAN by accident.
+#
+#   appctl start | stop | status | backup | restore
+#
+# For LAN access set EMAILD_BIND=0.0.0.0 in .env. See install.sh, which will
+# refuse to leave the dashboard open when you do.
+
+name: emaild
+
+x-image: &image "${EMAILD_IMAGE:-ghcr.io/soupnchill/emaild}:${EMAILD_VERSION:?EMAILD_VERSION must be pinned to an exact version}"
+
+services:
+  postgres:
+    image: postgres:17.2-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-emaild}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-emaild}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # §46: the database is never published, not even on the LAN. appctl reaches
+    # it through `compose exec`, which needs no port at all.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-emaild} -d ${POSTGRES_DB:-emaild}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  migrate:
+    image: *image
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Only the DSN. Schema changes need no application secrets.
+      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-emaild}
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  api:
+    image: *image
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      EMAILD_ROLE: api
+      EMAILD_ENV: production
+      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-emaild}
+      EMAILD_LOG_LEVEL: ${EMAILD_LOG_LEVEL:-INFO}
+      EMAILD_TRUSTED_PROXY_HOSTS: ${EMAILD_TRUSTED_PROXY_HOSTS:-}
+      EMAILD_DASHBOARD_ENABLED: ${EMAILD_DASHBOARD_ENABLED:-true}
+      EMAILD_DASHBOARD_TOKEN: ${EMAILD_DASHBOARD_TOKEN:-}
+      EMAILD_DASHBOARD_BEHIND_PROXY_AUTH: ${EMAILD_DASHBOARD_BEHIND_PROXY_AUTH:-false}
+      # Deliberately absent: MAILBOX_ENCRYPTION_KEY and MXROUTE_*.
+    ports:
+      # 127.0.0.1 by default. Set EMAILD_BIND=0.0.0.0 for LAN reachability --
+      # and read what install.sh says about cleartext API keys before you do.
+      - "${EMAILD_BIND:-127.0.0.1}:${API_HOST_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=5).status==200 else 1)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    image: *image
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      EMAILD_ROLE: worker
+      EMAILD_ENV: production
+      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-emaild}
+      EMAILD_LOG_LEVEL: ${EMAILD_LOG_LEVEL:-INFO}
+      EMAILD_MAILBOX_ENCRYPTION_KEY: ${EMAILD_MAILBOX_ENCRYPTION_KEY:?worker requires the mailbox encryption key}
+      # Deliberately absent: MXROUTE_*.
+    # No ports. Outbound SMTP only.
+    command: ["python", "-m", "emaild.worker"]
+    stop_grace_period: 45s
+
+  # Opt-in. Gives HTTPS and a hostname reachable from outside the LAN --
+  # necessary the day a product moves to a VPS, because it will not be able to
+  # reach a LAN-only emaild and mail stops silently rather than erroring.
+  cloudflared:
+    image: cloudflare/cloudflared:2024.12.2
+    restart: unless-stopped
+    profiles: ["public"]
+    depends_on:
+      - api
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    command: ["tunnel", "--no-autoupdate", "run"]
+    # Route /v1/* straight through -- bearer keys authenticate machines.
+    # Cloudflare Access goes on the dashboard routes ONLY: an API client cannot
+    # complete an SSO challenge and would receive HTML where it expects JSON.
+
+volumes:
+  postgres_data:
+    driver: local
+    # NOT a backup (§14). Use `appctl backup`, and keep the archives on a
+    # different machine than this one.

@@ -177,12 +177,18 @@ installation) · F-14 multi-arch · F-15 historical upgrade fixtures
 | **A LAN box** | Needs the install script to be real. Reachable from your network only. |
 | **A VPS** | Needs the Cloudflare Tunnel path finished, and makes emaild reachable from anywhere a product runs. |
 
-*Recommendation:* **VPS or LAN box, not here.** From the Phase 0 discussion —
-emaild is a dependency of applications, not an application. A product that
-migrates while emaild stays behind the dev-box firewall does not degrade, it
-silently stops sending.
+**DECIDED 2026-08-07: a LAN machine.**
 
-### D-2 · Does the backup contain the encryption key?
+Consequences accepted:
+
+- **API keys travel in cleartext** on a plain-HTTP LAN. The installer says this
+  out loud in `--lan` mode and generates a dashboard password because of it.
+- **A product later deployed to a VPS cannot reach a LAN-only emaild.** Same
+  silent-failure mode as the dev box, just a larger perimeter. The fix needs no
+  rearchitecting: enable the `cloudflared` profile, which gives HTTPS and a
+  hostname reachable from anywhere.
+
+### D-2 · Does the backup contain the encryption key? — **DECIDED: no**
 
 Fully argued in `persistent_data_inventory.md` §4.
 
@@ -191,14 +197,14 @@ in the manifest so restore fails fast when given the wrong key. A lost key costs
 an afternoon of re-provisioning; a leaked all-in-one backup costs every SMTP
 credential at once.
 
-### D-3 · Registry visibility
+### D-3 · Registry visibility — **DECIDED: private**
 
 GHCR, matching the repo's private visibility, or public?
 
 *Recommendation:* **private.** Nothing in the image is secret, but a public
 image invites questions about a service you have not chosen to publish.
 
-### D-4 · Version number at first release
+### D-4 · Version number at first release — **DECIDED: 0.9.0-rc.1 first**
 
 *Recommendation:* **`0.9.0-rc.1`, then `1.0.0` only after WO-12 passes.** §22
 permits pre-release versions precisely for this, and calling something 1.0.0

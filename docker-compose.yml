@@ -6,7 +6,9 @@
 # Promotion from private to public is a flag, never a rewrite
 # (deployment_and_release.md §2).
 
-name: emaild
+# Distinct from the production project name in deploy/compose.yaml. Sharing it
+# means a production install on this host would adopt the dev database volume.
+name: emaild-dev
 
 services:
   postgres:
