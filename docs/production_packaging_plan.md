@@ -218,3 +218,53 @@ claim the rest of this project has avoided making.
 Per §2 and §28: **no implementation until this is reviewed.** Nothing in Phase 9
 has changed application behaviour — this commit adds five documents and nothing
 else.
+
+---
+
+## 8. Release candidate drill — RESULT (2026-08-07)
+
+Run against `v0.9.0-rc.1`, published to GHCR by `release.yml` run 31208182096.
+
+| §29 step | Result |
+|---|---|
+| Install from a versioned release | pass — `inst_54479c2f47688cd20f540cb0` |
+| Create realistic data | pass — domain to `ready`, mailbox, project, key, suppression, one real delivered email |
+| Restart all services | pass — data intact |
+| Replace disposable containers | pass — `api` and `worker` destroyed and recreated, data intact |
+| Verify data | pass |
+| Back up | pass — manifest carries version, schema, installation id, key fingerprint |
+| Destroy the installation | pass — volume and directory removed |
+| Restore onto a clean installation | pass |
+| Verify the same data | pass — every count matched; canary suppression and full event timeline survived |
+| Verify health | pass — **and it sent a real email afterwards** |
+
+Two refusals confirmed along the way: restoring without the original encryption
+key was rejected on fingerprint mismatch, and the fresh installation's identity
+was replaced by the archive's rather than kept.
+
+### Findings
+
+**F-16 (minor, open).** `admin` commands that do not touch MXRoute — `keys`,
+`projects`, `suppressions`, `status` — still require the MXRoute credentials,
+because the requirement sits on the role rather than the command. During the
+drill this blocked key management on a freshly restored host until `.env` was
+fully repopulated. The documented procedure covers it (restore `.env` alongside
+the archive), so it is friction rather than a defect, but the requirement is
+stricter than it needs to be.
+
+**F-17 (cosmetic, open).** Worker heartbeats survive a restore, so a restored
+installation briefly reports workers that no longer exist. They age out to
+`STALE` within two minutes and are then replaced. Clearing the table on restore
+would be tidier.
+
+### Acceptance
+
+§25's twenty criteria are met, with the single exception noted below.
+
+**Not yet demonstrated:** pulling the published image from GHCR on this host.
+The release workflow's own smoke test pulled and verified it
+(`published image reports 0.9.0-rc.1`), but the local drill built from the
+release tag instead, because the available token lacks `read:packages`. The
+install path itself is unchanged either way — `install.sh` pulls when the image
+is absent locally — but the registry pull has not been exercised from an
+operator's machine.
