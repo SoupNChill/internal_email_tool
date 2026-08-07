@@ -1,0 +1,47 @@
+# release_rules (first_production_packaging §6): review what enters the build
+# context. Nothing here should ever reach an image layer.
+
+# Secrets -- the critical entries.
+.env
+.env.*
+!.env.example
+mxroute_information.md
+*.pem
+*.key
+secrets/
+
+# Source control and CI
+.git
+.gitignore
+.github
+.claude
+
+# Python build/dev artefacts
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+.mypy_cache
+.pytest_cache
+.ruff_cache
+htmlcov
+.coverage
+
+# Local state and backups
+postgres_data/
+backups/
+*.sqlite3
+*.log
+
+# Docs are not needed at runtime. README.md is the exception -- the build
+# requires it because pyproject.toml references it as the project readme.
+docs/
+release_rules/
+*.md
+!README.md
+
+# Editors / OS
+.vscode
+.idea
+.DS_Store

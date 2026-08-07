@@ -1,0 +1,35 @@
+# Secrets -- release_rules §17: never in git history.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Local state
+postgres_data/
+backups/
+*.sqlite3
+*.log
+
+# Editors
+.vscode/
+.idea/
+.DS_Store
+
+# Live credentials, kept on-disk but never in git (release_rules §17).
+# The real values belong in .env; see .env.example for the variable names.
+mxroute_information.md
+
+# Claude Code local settings
+.claude/settings.local.json

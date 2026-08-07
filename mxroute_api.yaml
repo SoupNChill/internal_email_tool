@@ -1,0 +1,1484 @@
+openapi: 3.0.3
+info:
+  title: MXroute Email Hosting API
+  description: >
+    REST API for managing MXroute email hosting accounts.
+
+
+    ## Authentication
+
+
+    All API requests require three HTTP headers:
+
+
+    | Header | Description |
+
+    |--------|-------------|
+
+    | `X-Server` | Your mail server hostname (e.g., `eagle.mxlogin.com`) |
+
+    | `X-Username` | Your DirectAdmin username |
+
+    | `X-API-Key` | Your API key |
+
+
+    Create API keys in your [mxpanel
+    dashboard](https://panel.mxroute.com/api-keys.php).
+
+
+    ## Rate Limits
+
+
+    | Operation Type | Limit |
+
+    |----------------|-------|
+
+    | Read (GET) | 100 requests/minute |
+
+    | Write (POST, PATCH, DELETE) | 20 requests/minute |
+
+
+    Rate limit headers are included in every response:
+
+    - `X-RateLimit-Limit`: Maximum requests allowed
+
+    - `X-RateLimit-Remaining`: Requests remaining in window
+
+    - `X-RateLimit-Reset`: Unix timestamp when limit resets
+
+
+    ## Error Responses
+
+
+    All errors follow this format:
+
+    ```json
+
+    {
+      "success": false,
+      "error": {
+        "code": "ERROR_CODE",
+        "message": "Human-readable message",
+        "field": "field_name"  // Optional, for validation errors
+      }
+    }
+
+    ```
+
+
+    Common error codes:
+
+    - `VALIDATION_ERROR` - Invalid input data
+
+    - `UNAUTHORIZED` - Invalid or missing credentials
+
+    - `FORBIDDEN` - Insufficient permissions
+
+    - `NOT_FOUND` - Resource not found
+
+    - `CONFLICT` - Resource already exists
+
+    - `BUSINESS_ERROR` - Business logic violation (e.g., limit reached)
+
+    - `RATE_LIMITED` - Too many requests
+
+    - `SERVER_ERROR` - Internal server error
+  version: 1.0.0
+  contact:
+    name: MXroute Support
+    url: https://mxroute.com
+servers:
+  - url: https://api.mxroute.com
+    description: Production API
+tags:
+  - name: Domains
+    description: Domain management
+  - name: Domain Pointers
+    description: Domain aliases and redirects
+  - name: Email Accounts
+    description: Email account management
+  - name: Email Forwarders
+    description: Email forwarding rules
+  - name: Spam Settings
+    description: Spam filter configuration
+  - name: DNS Info
+    description: DNS configuration information (read-only)
+  - name: Catch-All
+    description: Catch-all email settings
+  - name: Quota
+    description: Disk usage and quota information
+  - name: Reseller Users
+    description: User management (reseller only)
+  - name: Reseller Packages
+    description: Package management (reseller only)
+  - name: Account
+    description: Account-level information
+components:
+  securitySchemes:
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        Your API key password (created at panel.mxroute.com/api-keys.php).
+        Example: `Mx8d989005f0cded8371b7d7271c50K1`
+    serverAuth:
+      type: apiKey
+      in: header
+      name: X-Server
+      description: |
+        Your mail server hostname (shown on API Keys page).
+        Example: `eagle.mxlogin.com`
+    usernameAuth:
+      type: apiKey
+      in: header
+      name: X-Username
+      description: |
+        Your DirectAdmin username (shown on API Keys page).
+        Example: `johndoe`
+  schemas:
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: VALIDATION_ERROR
+            message:
+              type: string
+              example: Invalid domain format
+            field:
+              type: string
+              example: domain
+    Domain:
+      type: object
+      properties:
+        domain:
+          type: string
+          example: example.com
+        mail_hosting:
+          type: boolean
+          example: true
+        ssl_enabled:
+          type: boolean
+          example: true
+        pointers:
+          type: array
+          items:
+            type: string
+    EmailAccount:
+      type: object
+      properties:
+        username:
+          type: string
+          example: your_mailbox
+        email:
+          type: string
+          example: your_mailbox@example.com
+        quota:
+          type: integer
+          description: Quota in MB (0 = unlimited)
+          example: 1024
+        usage:
+          type: number
+          description: Current usage in MB
+          example: 256.5
+        limit:
+          type: integer
+          description: Daily send limit
+          example: 9600
+        sent:
+          type: integer
+          description: Emails sent today
+          example: 42
+        suspended:
+          type: boolean
+          example: false
+    Forwarder:
+      type: object
+      properties:
+        alias:
+          type: string
+          example: your_alias
+        email:
+          type: string
+          example: your_alias@example.com
+        destinations:
+          type: array
+          items:
+            type: string
+          example:
+            - recipient@otherdomain.com
+    DomainPointer:
+      type: object
+      properties:
+        pointer:
+          type: string
+          example: alias.com
+        type:
+          type: string
+          enum:
+            - alias
+            - redirect
+          example: alias
+        target:
+          type: string
+          example: example.com
+    DnsInfo:
+      type: object
+      properties:
+        mx_records:
+          type: array
+          items:
+            type: object
+            properties:
+              priority:
+                type: integer
+              hostname:
+                type: string
+              description:
+                type: string
+        spf:
+          type: object
+          properties:
+            type:
+              type: string
+              example: TXT
+            name:
+              type: string
+              example: "@"
+            value:
+              type: string
+              example: v=spf1 include:mxroute.com -all
+        dkim:
+          type: object
+          nullable: true
+          properties:
+            type:
+              type: string
+            name:
+              type: string
+            value:
+              type: string
+        verification:
+          type: object
+          nullable: true
+          properties:
+            type:
+              type: string
+            name:
+              type: string
+            value:
+              type: string
+            description:
+              type: string
+    CatchAll:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+            - fail
+            - blackhole
+            - address
+          example: fail
+        address:
+          type: string
+          nullable: true
+          example: catchall@example.com
+        description:
+          type: string
+    ResellerUser:
+      type: object
+      properties:
+        username:
+          type: string
+          example: johndoe
+        email:
+          type: string
+          example: john@example.com
+        domain:
+          type: string
+          example: example.com
+        package:
+          type: string
+          example: basic
+        suspended:
+          type: boolean
+          example: false
+        quota:
+          type: object
+          properties:
+            limit:
+              type: integer
+              nullable: true
+            used:
+              type: number
+            unlimited:
+              type: boolean
+    Package:
+      type: object
+      properties:
+        name:
+          type: string
+          example: basic
+        settings:
+          type: object
+          properties:
+            quota_gb:
+              type: number
+              nullable: true
+            quota_unlimited:
+              type: boolean
+            domains:
+              type: integer
+              nullable: true
+            email_accounts:
+              type: integer
+              nullable: true
+            email_forwarders:
+              type: integer
+              nullable: true
+            domain_pointers:
+              type: integer
+              nullable: true
+  responses:
+    Unauthorized:
+      description: Authentication failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            success: false
+            error:
+              code: UNAUTHORIZED
+              message: Invalid API credentials
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            success: false
+            error:
+              code: NOT_FOUND
+              message: Resource not found
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until rate limit resets
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            success: false
+            error:
+              code: RATE_LIMITED
+              message: Too many requests. Please try again later.
+security:
+  - serverAuth: []
+    usernameAuth: []
+    apiKeyAuth: []
+paths:
+  /verification-key:
+    get:
+      summary: Get domain verification key
+      description: >
+        Returns your domain verification key, which must be added as a DNS TXT
+        record
+
+        before adding new domains to your account.
+
+
+        **Automation workflow:**
+
+        1. Call this endpoint to get your verification key
+
+        2. Add a TXT record to your domain: `{key}.yourdomain.com` with value
+        `domain-verified`
+
+        3. Wait for DNS propagation (typically 5-15 minutes)
+
+        4. Call `POST /domains` to add the domain
+      tags:
+        - Account
+      responses:
+        "200":
+          description: Verification key retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      key:
+                        type: string
+                        description: "The verification key (format: _da-verify-{32 hex chars})"
+                        example: _da-verify-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4
+                      record:
+                        type: object
+                        properties:
+                          type:
+                            type: string
+                            example: TXT
+                          name:
+                            type: string
+                            description: Use this as the record name (prepend to your domain)
+                            example: _da-verify-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4
+                          value:
+                            type: string
+                            example: domain-verified
+                      description:
+                        type: string
+              example:
+                success: true
+                data:
+                  key: _da-verify-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4
+                  record:
+                    type: TXT
+                    name: _da-verify-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4
+                    value: domain-verified
+                  description: Add this TXT record to your domain before adding it to your account
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          description: Unable to retrieve verification key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                success: false
+                error:
+                  code: VERIFICATION_KEY_NOT_FOUND
+                  message: Unable to retrieve verification key for this account
+  /domains:
+    get:
+      summary: List domains
+      description: Returns a list of all domains on the account
+      tags:
+        - Domains
+      responses:
+        "200":
+          description: List of domain names
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      type: string
+              example:
+                success: true
+                data:
+                  - example.com
+                  - mydomain.org
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      summary: Create domain
+      description: Add a new domain to the account.
+      tags:
+        - Domains
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - domain
+              properties:
+                domain:
+                  type: string
+                  description: Domain name to add
+                  example: example.com
+      responses:
+        "201":
+          description: Domain created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      domain:
+                        type: string
+                      ssl_enabled:
+                        type: boolean
+        "409":
+          description: Domain already exists
+  /domains/{domain}:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+        example: example.com
+    get:
+      summary: Get domain details
+      tags:
+        - Domains
+      responses:
+        "200":
+          description: Domain details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Domain"
+    delete:
+      summary: Delete domain
+      description: Remove a domain from the account
+      tags:
+        - Domains
+      responses:
+        "204":
+          description: Domain deleted
+  /domains/{domain}/mail-status:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      summary: Set mail hosting status
+      description: Enable or disable mail hosting for a domain
+      tags:
+        - Domains
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - enabled
+              properties:
+                enabled:
+                  type: boolean
+                  description: Whether mail hosting is enabled
+      responses:
+        "200":
+          description: Status updated
+  /domains/{domain}/pointers:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: List domain pointers
+      tags:
+        - Domain Pointers
+      responses:
+        "200":
+          description: List of domain pointers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DomainPointer"
+    post:
+      summary: Create domain pointer
+      tags:
+        - Domain Pointers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - pointer
+              properties:
+                pointer:
+                  type: string
+                  description: Domain to point to the target
+                  example: alias.com
+                alias:
+                  type: boolean
+                  description: If true, creates an alias. If false, creates a redirect.
+                  default: true
+      responses:
+        "201":
+          description: Pointer created
+  /domains/{domain}/pointers/{pointer}:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: pointer
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      summary: Delete domain pointer
+      tags:
+        - Domain Pointers
+      responses:
+        "204":
+          description: Pointer deleted
+  /domains/{domain}/email-accounts:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: List email accounts
+      tags:
+        - Email Accounts
+      responses:
+        "200":
+          description: List of email accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EmailAccount"
+    post:
+      summary: Create email account
+      tags:
+        - Email Accounts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                  description: Local part of email (the part before @)
+                  example: your_mailbox
+                password:
+                  type: string
+                  description: Must be 8+ characters and contain at least one uppercase letter,
+                    one lowercase letter, and one number.
+                  minLength: 8
+                quota:
+                  type: integer
+                  description: Storage quota in MB (0 = unlimited)
+                  default: 1024
+                limit:
+                  type: integer
+                  description: Daily send limit
+                  default: 9600
+                  maximum: 9600
+      responses:
+        "201":
+          description: Account created
+  /domains/{domain}/email-accounts/{user}:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: user
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get email account details
+      tags:
+        - Email Accounts
+      responses:
+        "200":
+          description: Account details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/EmailAccount"
+    patch:
+      summary: Update email account
+      tags:
+        - Email Accounts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                password:
+                  type: string
+                  description: Must be 8+ characters and contain at least one uppercase letter,
+                    one lowercase letter, and one number.
+                  minLength: 8
+                quota:
+                  type: integer
+                  description: New quota in MB
+                limit:
+                  type: integer
+                  description: New daily send limit
+      responses:
+        "200":
+          description: Account updated
+    delete:
+      summary: Delete email account
+      tags:
+        - Email Accounts
+      responses:
+        "204":
+          description: Account deleted
+  /domains/{domain}/forwarders:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: List email forwarders
+      tags:
+        - Email Forwarders
+      responses:
+        "200":
+          description: List of forwarders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Forwarder"
+    post:
+      summary: Create email forwarder
+      description: >
+        Create a new email forwarder.
+
+
+        **Note:** Forwarding to Yahoo, AOL, Gmail, and similar providers will
+        automatically enable Expert Spam Filtering for the domain to protect
+        your sending reputation.
+
+
+        Special destinations:
+
+        - `:blackhole:` - Silently discard emails
+
+        - `:fail:` - Reject with error
+      tags:
+        - Email Forwarders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - alias
+                - destinations
+              properties:
+                alias:
+                  type: string
+                  description: Local part of forwarder address (the part before @)
+                  example: your_alias
+                destinations:
+                  type: array
+                  items:
+                    type: string
+                  description: Email addresses to forward to
+                  example:
+                    - recipient@otherdomain.com
+      responses:
+        "201":
+          description: Forwarder created
+  /domains/{domain}/forwarders/{alias}:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: alias
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      summary: Delete email forwarder
+      tags:
+        - Email Forwarders
+      responses:
+        "204":
+          description: Forwarder deleted
+  /domains/{domain}/spam/settings:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get spam settings
+      tags:
+        - Spam Settings
+      responses:
+        "200":
+          description: Current spam settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      high_score:
+                        type: integer
+                        description: Score threshold for auto-deletion (1-50)
+    patch:
+      summary: Update spam settings
+      tags:
+        - Spam Settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - high_score
+              properties:
+                high_score:
+                  type: integer
+                  description: Score threshold for auto-deletion
+                  minimum: 1
+                  maximum: 50
+      responses:
+        "200":
+          description: Settings updated
+  /domains/{domain}/spam/whitelist:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get spam whitelist
+      tags:
+        - Spam Settings
+      responses:
+        "200":
+          description: Whitelist entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      type: string
+    post:
+      summary: Add to whitelist
+      tags:
+        - Spam Settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - entry
+              properties:
+                entry:
+                  type: string
+                  description: Email or pattern (supports wildcards)
+                  example: "*@trusted.com"
+      responses:
+        "201":
+          description: Entry added
+  /domains/{domain}/spam/whitelist/{entry}:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: entry
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      summary: Remove from whitelist
+      tags:
+        - Spam Settings
+      responses:
+        "204":
+          description: Entry removed
+  /domains/{domain}/spam/blacklist:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get spam blacklist
+      tags:
+        - Spam Settings
+      responses:
+        "200":
+          description: Blacklist entries
+    post:
+      summary: Add to blacklist
+      tags:
+        - Spam Settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - entry
+              properties:
+                entry:
+                  type: string
+      responses:
+        "201":
+          description: Entry added
+  /domains/{domain}/spam/blacklist/{entry}:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: entry
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      summary: Remove from blacklist
+      tags:
+        - Spam Settings
+      responses:
+        "204":
+          description: Entry removed
+  /domains/{domain}/dns:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get DNS configuration
+      description: Returns the DNS records you need to configure at your registrar
+      tags:
+        - DNS Info
+      responses:
+        "200":
+          description: DNS configuration info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/DnsInfo"
+  /domains/{domain}/catch-all:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get catch-all setting
+      tags:
+        - Catch-All
+      responses:
+        "200":
+          description: Current catch-all setting
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/CatchAll"
+    patch:
+      summary: Set catch-all
+      tags:
+        - Catch-All
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - type
+              properties:
+                type:
+                  type: string
+                  enum:
+                    - fail
+                    - blackhole
+                    - address
+                  description: |
+                    - `fail`: Reject emails to non-existent addresses
+                    - `blackhole`: Silently discard
+                    - `address`: Forward to specified email
+                address:
+                  type: string
+                  description: Email address (required if type is "address")
+      responses:
+        "200":
+          description: Catch-all updated
+  /quota:
+    get:
+      summary: Get disk usage and quota
+      description: Returns overall disk usage, quota limit, usage percentage, category
+        breakdown, and grace period status. Data is refreshed hourly.
+      tags:
+        - Quota
+      responses:
+        "200":
+          description: Quota data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  username:
+                    type: string
+                  total_used:
+                    type: integer
+                    description: Total bytes used
+                  total_limit:
+                    type: integer
+                    description: Quota limit in bytes (0 = unlimited)
+                  percent_used:
+                    type: number
+                    description: Usage as percentage of limit
+                  breakdown:
+                    type: object
+                    description: Usage by category in bytes
+                    properties:
+                      email:
+                        type: integer
+                      web:
+                        type: integer
+                      databases:
+                        type: integer
+                      backups:
+                        type: integer
+                      other:
+                        type: integer
+                  grace_period:
+                    type: object
+                    nullable: true
+                    description: Present when account has exceeded quota
+                    properties:
+                      days_remaining:
+                        type: integer
+                      deadline:
+                        type: string
+                  updated_at:
+                    type: string
+                    format: date-time
+  /quota/email:
+    get:
+      summary: Get per-email disk usage
+      description: Returns disk usage for each email account, sorted by size (largest
+        first). Data is refreshed hourly.
+      tags:
+        - Quota
+      responses:
+        "200":
+          description: Email usage data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  username:
+                    type: string
+                  accounts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        email_address:
+                          type: string
+                        size_bytes:
+                          type: integer
+                        updated_at:
+                          type: string
+                          format: date-time
+  /reseller/users:
+    get:
+      summary: List users
+      description: Returns a list of all users under the reseller account
+      tags:
+        - Reseller Users
+      responses:
+        "200":
+          description: List of usernames
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      type: string
+        "403":
+          description: Requires reseller privileges
+    post:
+      summary: Create user
+      tags:
+        - Reseller Users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - email
+                - password
+                - package
+              properties:
+                username:
+                  type: string
+                  description: 1-10 chars, lowercase letters, numbers, underscores
+                  example: johndoe
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+                package:
+                  type: string
+                  description: Package name to assign
+      responses:
+        "201":
+          description: User created
+  /reseller/users/{username}:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get user details
+      tags:
+        - Reseller Users
+      responses:
+        "200":
+          description: User details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/ResellerUser"
+    patch:
+      summary: Modify user
+      tags:
+        - Reseller Users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quota:
+                  type: string
+                  description: Quota in MB or "unlimited"
+                password:
+                  type: string
+                  minLength: 8
+      responses:
+        "200":
+          description: User updated
+    delete:
+      summary: Delete user
+      tags:
+        - Reseller Users
+      responses:
+        "204":
+          description: User deleted
+  /reseller/users/{username}/suspend:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Suspend user
+      tags:
+        - Reseller Users
+      responses:
+        "200":
+          description: User suspended
+  /reseller/users/{username}/unsuspend:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Unsuspend user
+      tags:
+        - Reseller Users
+      responses:
+        "200":
+          description: User unsuspended
+  /reseller/users/{username}/package:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      summary: Change user's package
+      description: Assign a different package to a user
+      tags:
+        - Reseller Users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - package
+              properties:
+                package:
+                  type: string
+                  description: Name of the package to assign
+                  example: premium
+      responses:
+        "200":
+          description: Package changed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/ResellerUser"
+        "403":
+          description: Requires reseller privileges
+        "404":
+          description: User not found
+        "422":
+          description: Package does not exist
+  /reseller/packages:
+    get:
+      summary: List packages
+      tags:
+        - Reseller Packages
+      responses:
+        "200":
+          description: List of package names
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      type: string
+    post:
+      summary: Create package
+      tags:
+        - Reseller Packages
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  description: Package name (letters, numbers, underscores, hyphens)
+                quota:
+                  type: string
+                  description: Disk quota in GB or "unlimited"
+                  default: "1"
+                domains:
+                  type: string
+                  description: Number of domains or "unlimited"
+                  default: "1"
+                email_accounts:
+                  type: string
+                  description: Number of email accounts or "unlimited"
+                  default: "100"
+                email_forwarders:
+                  type: string
+                  description: Number of forwarders or "unlimited"
+                  default: "100"
+                domain_pointers:
+                  type: string
+                  description: Number of domain pointers or "unlimited"
+                  default: "10"
+      responses:
+        "201":
+          description: Package created
+  /reseller/packages/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get package details
+      tags:
+        - Reseller Packages
+      responses:
+        "200":
+          description: Package details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Package"
+    patch:
+      summary: Update package
+      tags:
+        - Reseller Packages
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quota:
+                  type: string
+                domains:
+                  type: string
+                email_accounts:
+                  type: string
+                email_forwarders:
+                  type: string
+                domain_pointers:
+                  type: string
+      responses:
+        "200":
+          description: Package updated
+    delete:
+      summary: Delete package
+      description: Package cannot be deleted if it is in use by any users
+      tags:
+        - Reseller Packages
+      responses:
+        "204":
+          description: Package deleted
+        "422":
+          description: Package is in use

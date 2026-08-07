@@ -1,0 +1,128 @@
+# emaild -- one file, two exposure modes.
+#
+#   docker compose up                    local only. API on 127.0.0.1:8000.
+#   docker compose --profile public up   adds the tunnel; reachable anywhere.
+#
+# Promotion from private to public is a flag, never a rewrite
+# (deployment_and_release.md §2).
+
+name: emaild
+
+services:
+  postgres:
+    image: postgres:17.2-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-emaild}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-emaild}
+      # Deterministic collation: index ordering must not shift under a locale change.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # §46: databases stay internal. Published to localhost ONLY for local
+    # inspection, and only because 127.0.0.1 is not reachable off-box.
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-emaild} -d ${POSTGRES_DB:-emaild}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Migrations run as their own unit, explicitly, before the app starts.
+  # release_rules §37 step 10: never as an application side effect, so a
+  # migration failure stops the upgrade instead of half-starting the service.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Only the DSN. alembic/env.py reads EMAILD_DATABASE_URL from the
+      # environment directly and never constructs Settings, so schema changes
+      # need no application secrets at all -- least privilege applies to
+      # migrations too, not just to the running services.
+      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-emaild}
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      EMAILD_ROLE: api
+      EMAILD_ENV: ${EMAILD_ENV:-development}
+      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-emaild}
+      EMAILD_LOG_LEVEL: ${EMAILD_LOG_LEVEL:-INFO}
+      EMAILD_TRUSTED_PROXY_HOSTS: ${EMAILD_TRUSTED_PROXY_HOSTS:-}
+      # Deliberately absent: MAILBOX_ENCRYPTION_KEY and MXROUTE_*.
+      # Startup fails if they are present (emaild/config.py).
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=5).status==200 else 1)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      EMAILD_ROLE: worker
+      EMAILD_ENV: ${EMAILD_ENV:-development}
+      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-emaild}
+      EMAILD_LOG_LEVEL: ${EMAILD_LOG_LEVEL:-INFO}
+      # Soft default: compose interpolates every service at parse time, even
+      # ones behind an inactive profile, so a hard `:?` here would break plain
+      # `docker compose up`. The real check lives in emaild/config.py, which
+      # refuses to start role=worker without this key.
+      EMAILD_MAILBOX_ENCRYPTION_KEY: ${EMAILD_MAILBOX_ENCRYPTION_KEY:-}
+      # Deliberately absent: MXROUTE_*. The worker sends mail; it does not
+      # provision mailboxes.
+    # No ports. The worker has no listener -- outbound SMTP only.
+    command: ["python", "-m", "emaild.worker"]
+    profiles: ["worker"]  # Phase 5. Enabled once emaild/worker.py exists.
+
+  # Public exposure. Opt-in, and the only service that reaches the internet.
+  cloudflared:
+    image: cloudflare/cloudflared:2024.12.2
+    restart: unless-stopped
+    profiles: ["public"]
+    depends_on:
+      - api
+    # Token via environment, not argv: a command-line token is visible in
+    # `ps` output and in container inspect. Same reason the soft default is
+    # used here as on the worker -- inactive profiles are still parsed.
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    command: ["tunnel", "--no-autoupdate", "run"]
+    # Route /v1/* straight through -- bearer keys authenticate machines.
+    # Put Cloudflare Access on the dashboard routes ONLY: an API client cannot
+    # complete an SSO challenge and would receive an HTML login page where it
+    # expects JSON. See deployment_and_release.md §2.
+
+volumes:
+  postgres_data:
+    driver: local
+    # NOTE (release_rules §14): this volume is NOT a backup. The backup story is
+    # pg_dump plus the encryption key, stored off-box and restore-tested.

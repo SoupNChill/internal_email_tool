@@ -1,0 +1,59 @@
+[project]
+name = "emaild"
+version = "0.1.0"
+description = "Internal transactional email API. One honest timeline, one dependable foundation."
+requires-python = ">=3.12"
+
+# Pinned per release_rules §18. Bump deliberately, never incidentally.
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    "sqlalchemy[asyncio]==2.0.36",
+    "asyncpg==0.30.0",
+    "alembic==1.14.0",
+    "pydantic==2.10.4",
+    "pydantic-settings==2.7.0",
+    "cryptography==44.0.0",
+    "python-ulid==3.0.0",
+    "httpx==0.28.1",
+    "aiosmtplib==3.0.2",
+    "email-validator==2.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.25.0",
+    "ruff==0.8.4",
+    "mypy==1.14.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["emaild"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S"]
+# S101 (assert) is fine in tests; S105/S106 flag the literal word "password" in
+# field names, which we use extensively as a column name, not a secret value.
+ignore = ["S105", "S106"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+"alembic/*" = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+warn_return_any = true
