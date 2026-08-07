@@ -16,7 +16,11 @@
 set -euo pipefail
 
 readonly BACKUP_FORMAT_VERSION=1
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || {
+  printf 'error: cannot determine the installation directory\n' >&2
+  exit 1
+}
+readonly SCRIPT_DIR
 cd "$SCRIPT_DIR"
 
 # Exit codes are meaningful so this works from cron or a check script.
@@ -100,7 +104,7 @@ cmd_version() {
 
 cmd_health() {
   local port; port="$(env_get API_HOST_PORT)"; port="${port:-8000}"
-  local body status
+  local body
   if ! body="$(curl -fsS "http://127.0.0.1:${port}/health/ready" 2>/dev/null)"; then
     bad "api is not answering on 127.0.0.1:${port}"
     return "$EX_UNHEALTHY"
@@ -352,8 +356,7 @@ cmd_restore() {
   # --- 10/11. start and health-check ---
   compose up -d >/dev/null
   info "Waiting for health..."
-  local i
-  for i in $(seq 1 30); do sleep 2; cmd_health >/dev/null 2>&1 && break; done
+  for _ in $(seq 1 30); do sleep 2; cmd_health >/dev/null 2>&1 && break; done
 
   # --- 12. verify and report ---
   local restored_messages restored_install restored_supp
