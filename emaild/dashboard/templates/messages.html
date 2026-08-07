@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}emaild — messages{% endblock %}
+{% block content %}
+<h1>Messages</h1>
+<form class="filters" method="get">
+  <input type="search" name="q" value="{{ q or '' }}" placeholder="recipient, subject, or id">
+  <select name="status">
+    <option value="">any status</option>
+    {% for s in statuses %}<option value="{{ s }}" {{ 'selected' if s == status }}>{{ s }}</option>{% endfor %}
+  </select>
+  <label class="muted" style="align-self:center">
+    <input type="checkbox" name="review" value="1" {{ 'checked' if review }}> needs review only
+  </label>
+  <button type="submit">Filter</button>
+</form>
+
+{% if not messages %}
+<div class="empty">No messages match.</div>
+{% else %}
+<table>
+  <tr><th>ID</th><th>Status</th><th>From</th><th>To</th><th>Subject</th><th>Created</th></tr>
+  {% for m in messages %}
+  <tr>
+    <td class="mono"><a href="/messages/{{ m.public_id }}">{{ m.public_id[:20] }}…</a></td>
+    <td><span class="pill {{ m.pill }}">{{ m.status }}</span>
+        {% if m.needs_review %}<span class="pill bad">review</span>{% endif %}</td>
+    <td class="mono muted">{{ m.from_address }}</td>
+    <td class="mono">{{ m.to_summary }}</td>
+    <td>{{ m.subject or '—' }}</td>
+    <td class="muted">{{ m.created }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted" style="font-size:.85rem">Showing {{ messages|length }} of {{ total }}.</p>
+{% endif %}
+{% endblock %}

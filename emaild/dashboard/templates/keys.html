@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}emaild — keys{% endblock %}
+{% block content %}
+<h1>API keys</h1>
+{% if not keys %}<div class="empty">No keys issued.</div>{% else %}
+<table>
+  <tr><th>Name</th><th>Project</th><th>Prefix</th><th>State</th><th>Last used</th><th>Sender scope</th></tr>
+  {% for k in keys %}
+  <tr>
+    <td>{{ k.name }}</td>
+    <td>{{ k.project }}</td>
+    <td class="mono muted">{{ k.key_prefix }}…</td>
+    <td><span class="pill {{ 'ok' if k.state == 'active' else 'bad' }}">{{ k.state }}</span></td>
+    <td class="muted">{{ k.last_used or 'never' }}</td>
+    <td class="mono">{{ k.scopes|join(', ') or '—' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted" style="font-size:.85rem">
+  Only a SHA-256 hash is stored — a key is shown once, at creation, and is never recoverable.
+  Revoke with <code>python -m emaild.admin keys revoke &lt;name&gt;</code>; it takes effect
+  on the next request, because authentication is never cached.
+</p>
+{% endif %}
+{% endblock %}

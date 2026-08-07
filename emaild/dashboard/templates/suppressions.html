@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}emaild — suppressions{% endblock %}
+{% block content %}
+<h1>Suppressions</h1>
+<p class="muted" style="font-size:.9rem;margin-top:-.5rem">
+  Addresses we refuse to send to. Bad external recipients are accepted at RCPT and bounce
+  out of band, so this list is the only brake that exists.
+</p>
+{% if not suppressions %}<div class="empty">Nothing suppressed.</div>{% else %}
+<table>
+  <tr><th>Address</th><th>Source</th><th>Reason</th><th>Added</th></tr>
+  {% for s in suppressions %}
+  <tr>
+    <td class="mono">{{ s.address }}</td>
+    <td><span class="pill {{ 'warn' if s.source == 'bounce' else '' }}">{{ s.source }}</span></td>
+    <td class="muted">{{ s.reason or '—' }}</td>
+    <td class="muted">{{ s.created }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted" style="font-size:.85rem">
+  Showing {{ suppressions|length }} of {{ total }}. Removal is operator-only and requires
+  <code>--yes</code>: adding fails closed, removing fails open.
+</p>
+{% endif %}
+{% endblock %}

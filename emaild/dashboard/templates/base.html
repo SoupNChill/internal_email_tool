@@ -1,0 +1,101 @@
+{#
+  One stylesheet, no JavaScript, no build step. The dashboard exists to answer
+  questions on a laptop at an awkward hour, not to be impressive.
+#}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}emaild{% endblock %}</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1c1c1a; --muted: #6b6b66; --line: #e3e3df;
+    --ok: #2f7a4a; --warn: #a8641a; --bad: #a33232; --accent: #2c5aa0;
+    --card: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --fg: #e8e8e4; --muted: #97978f; --line: #2b2d31;
+      --ok: #6cc48c; --warn: #d8a24a; --bad: #e07a7a; --accent: #7aa5e8;
+      --card: #1d1f23;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    border-bottom: 1px solid var(--line); padding: .75rem 1.25rem;
+    display: flex; gap: 1.25rem; align-items: baseline; flex-wrap: wrap;
+    background: var(--card);
+  }
+  header .brand { font-weight: 650; letter-spacing: -.01em; }
+  header a { color: var(--muted); text-decoration: none; }
+  header a:hover, header a.active { color: var(--fg); }
+  main { max-width: 1100px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 1rem; letter-spacing: -.01em; }
+  h2 { font-size: 1rem; margin: 2rem 0 .6rem; color: var(--muted);
+       text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th { text-align: left; font-weight: 600; color: var(--muted);
+       border-bottom: 1px solid var(--line); padding: .5rem .6rem; }
+  td { padding: .5rem .6rem; border-bottom: 1px solid var(--line);
+       vertical-align: top; }
+  tr:hover td { background: var(--card); }
+  a { color: var(--accent); }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                font-size: .85em; }
+  .cards { display: grid; gap: .75rem;
+           grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line);
+          border-radius: 8px; padding: .8rem .9rem; }
+  .card .label { color: var(--muted); font-size: .75rem;
+                 text-transform: uppercase; letter-spacing: .05em; }
+  .card .value { font-size: 1.5rem; font-weight: 600; letter-spacing: -.02em;
+                 margin-top: .15rem; }
+  .banner { border-radius: 8px; padding: .7rem .9rem; margin-bottom: 1.25rem;
+            border: 1px solid; font-size: .9rem; }
+  .banner.ok   { border-color: var(--ok);   color: var(--ok); }
+  .banner.bad  { border-color: var(--bad);  color: var(--bad); }
+  .pill { display: inline-block; padding: .1rem .45rem; border-radius: 99px;
+          font-size: .75rem; border: 1px solid var(--line); white-space: nowrap; }
+  .pill.ok   { color: var(--ok);   border-color: var(--ok); }
+  .pill.warn { color: var(--warn); border-color: var(--warn); }
+  .pill.bad  { color: var(--bad);  border-color: var(--bad); }
+  .muted { color: var(--muted); }
+  .bar { height: 6px; background: var(--line); border-radius: 99px;
+         overflow: hidden; min-width: 80px; }
+  .bar > span { display: block; height: 100%; background: var(--accent); }
+  .timeline { list-style: none; padding: 0; margin: 0; }
+  .timeline li { border-left: 2px solid var(--line); padding: 0 0 1rem 1rem;
+                 position: relative; }
+  .timeline li::before { content: ""; position: absolute; left: -5px; top: .4rem;
+                         width: 8px; height: 8px; border-radius: 99px;
+                         background: var(--accent); }
+  .timeline li:last-child { border-left-color: transparent; }
+  form.filters { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  input, select { font: inherit; padding: .35rem .5rem; border-radius: 6px;
+                  border: 1px solid var(--line); background: var(--card);
+                  color: var(--fg); }
+  button { font: inherit; padding: .35rem .8rem; border-radius: 6px;
+           border: 1px solid var(--line); background: var(--card);
+           color: var(--fg); cursor: pointer; }
+  .empty { color: var(--muted); padding: 2rem 0; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">emaild</span>
+  <a href="/" class="{{ 'active' if page == 'overview' }}">Overview</a>
+  <a href="/domains" class="{{ 'active' if page == 'domains' }}">Domains</a>
+  <a href="/messages" class="{{ 'active' if page == 'messages' }}">Messages</a>
+  <a href="/keys" class="{{ 'active' if page == 'keys' }}">Keys</a>
+  <a href="/suppressions" class="{{ 'active' if page == 'suppressions' }}">Suppressions</a>
+  <span style="margin-left:auto" class="muted mono">v{{ version }} · {{ environment }}</span>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

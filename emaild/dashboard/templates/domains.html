@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}emaild — domains{% endblock %}
+{% block content %}
+<h1>Domains</h1>
+{% if not domains %}
+<div class="empty">No domains tracked. Add one with <code>python -m emaild.admin domains add &lt;name&gt;</code></div>
+{% else %}
+<table>
+  <tr><th>Domain</th><th>Status</th><th>DNS checks</th><th>SMTP host</th><th>Last checked</th></tr>
+  {% for d in domains %}
+  <tr>
+    <td class="mono">{{ d.name }}</td>
+    <td><span class="pill {{ 'ok' if d.status == 'ready' else ('bad' if d.status in ('misconfigured','suspended') else 'warn') }}">{{ d.status }}</span></td>
+    <td>
+      {% if d.checks %}
+        {% for name, result in d.checks.items() %}
+          <span class="pill {{ 'ok' if result == 'pass' else ('warn' if name == 'dmarc' else 'bad') }}">{{ name }}</span>
+        {% endfor %}
+      {% else %}<span class="muted">never verified</span>{% endif %}
+    </td>
+    <td class="mono muted">{{ d.smtp_host or '—' }}</td>
+    <td class="muted">{{ d.checked or 'never' }}</td>
+  </tr>
+  {% if d.missing %}
+  <tr><td colspan="5" style="padding-top:0">
+    <span class="muted">Not resolving:</span>
+    {% for m in d.missing %}<code>{{ m }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+    <span class="muted"> — run <code>python -m emaild.admin domains records {{ d.name }}</code> for the exact records.</span>
+  </td></tr>
+  {% endif %}
+  {% endfor %}
+</table>
+<p class="muted" style="font-size:.85rem">
+  Only <strong>ready</strong> domains may send. DMARC is reported but does not block —
+  it is a policy statement, not an authentication mechanism.
+</p>
+{% endif %}
+{% endblock %}

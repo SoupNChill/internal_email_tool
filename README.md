@@ -7,12 +7,31 @@ Sends through MXRoute over SMTP. Applications never see SMTP credentials.
 
 ## Status
 
-**Phase 7 of 9 — observability.** The vision's *first perfect mile* is complete:
-a domain is verified, a scoped key is issued, a message is durably accepted,
-delivered, retried or classified honestly, and both the timeline and the metrics
-reflect what actually happened.
+**Phase 8 of 9 — dashboard.** The vision's *first perfect mile* is complete and
+has an operator interface: a domain is verified, a scoped key is issued, a
+message is durably accepted, delivered, retried or classified honestly, and both
+the timeline and the metrics reflect what actually happened.
 
-Remaining: dashboard (8), production packaging (9). See `build_plan.md`.
+Remaining: production packaging (9). See `build_plan.md`.
+
+**Integrating a product?** `docs/integration.md` is the whole thing — paste it to
+a coding assistant, or read it in two minutes.
+
+The dashboard is at `/` — read-only by design. Every mutation lives in the admin
+CLI, where it gets a confirmation prompt and a log line.
+
+| Page | Answers |
+|---|---|
+| `/` | Is email healthy? Volume, latency, headroom, workers. |
+| `/domains` | Which domains can send, and exactly which DNS records are missing. |
+| `/messages` | Search by recipient, subject, or id; open one for its timeline. |
+| `/keys` | What exists, what it may send as, when it was last used. |
+| `/suppressions` | Who we refuse to mail, and why. |
+
+Serving it unauthenticated in production is refused at startup. Either set
+`EMAILD_DASHBOARD_TOKEN`, or set `EMAILD_DASHBOARD_BEHIND_PROXY_AUTH=true` to
+confirm Cloudflare Access is handling it. Never put Access in front of `/v1/*` —
+a machine client cannot complete an SSO challenge.
 
 Is email healthy?
 

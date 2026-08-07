@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}emaild — {{ m.public_id }}{% endblock %}
+{% block content %}
+<h1 class="mono" style="font-size:1rem">{{ m.public_id }}</h1>
+<p>
+  <span class="pill {{ m.pill }}">{{ m.status }}</span>
+  {% if m.needs_review %}<span class="pill bad">needs review</span>{% endif %}
+  <span class="muted"> · attempt {{ m.attempts }}</span>
+</p>
+
+<table style="margin-top:1rem">
+  <tr><th style="width:9rem">From</th><td class="mono">{{ m.from_display }}</td></tr>
+  <tr><th>To</th><td class="mono">{{ m.to_addresses|join(', ') }}</td></tr>
+  {% if m.cc_addresses %}<tr><th>Cc</th><td class="mono">{{ m.cc_addresses|join(', ') }}</td></tr>{% endif %}
+  {% if m.bcc_addresses %}<tr><th>Bcc</th><td class="mono">{{ m.bcc_addresses|join(', ') }}</td></tr>{% endif %}
+  <tr><th>Subject</th><td>{{ m.subject or '—' }}</td></tr>
+  <tr><th>Project</th><td>{{ m.project }}</td></tr>
+  <tr><th>Message-ID</th><td class="mono muted">{{ m.message_id_header }}</td></tr>
+  <tr><th>Created</th><td class="muted">{{ m.created }}</td></tr>
+  {% if m.completed %}<tr><th>Completed</th><td class="muted">{{ m.completed }}</td></tr>{% endif %}
+  {% if m.provider_latency_ms %}<tr><th>Provider took</th><td>{{ m.provider_latency_ms }} ms</td></tr>{% endif %}
+  {% if m.failure_class %}<tr><th>Failure</th><td><span class="pill bad">{{ m.failure_class }}</span>
+      <span class="mono muted">{{ m.failure_code or '' }}</span></td></tr>{% endif %}
+  {% if m.provider_response %}<tr><th>Provider said</th><td class="mono">{{ m.provider_response }}</td></tr>{% endif %}
+</table>
+
+<h2>Timeline</h2>
+<ul class="timeline">
+  {% for e in m.events %}
+  <li>
+    <div><strong class="mono">{{ e.type }}</strong> <span class="muted">{{ e.at }}</span></div>
+    {% if e.detail %}
+    <div class="muted mono" style="font-size:.8rem">
+      {% for k, v in e.detail.items() %}{{ k }}={{ v }}{% if not loop.last %} · {% endif %}{% endfor %}
+    </div>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+
+<p class="muted" style="font-size:.85rem;margin-top:1.5rem">
+  The message body is never shown here. It is stored only until delivery completes,
+  then purged — verification links and password-reset tokens must not become a
+  permanent archive.
+</p>
+{% endblock %}

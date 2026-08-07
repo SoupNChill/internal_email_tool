@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}emaild — overview{% endblock %}
+{% block content %}
+<h1>Is email healthy?</h1>
+
+<div class="banner {{ 'ok' if o.queue.healthy else 'bad' }}">
+  {% if o.queue.healthy %}
+    Healthy. {{ o.queue.pending }} pending, nothing flagged for review.
+  {% else %}
+    Needs attention — {{ o.queue.reason }}
+  {% endif %}
+</div>
+
+<div class="cards">
+  <div class="card"><div class="label">Requested</div><div class="value">{{ o.requested }}</div><div class="muted">last {{ o.window_hours }}h</div></div>
+  <div class="card"><div class="label">Accepted</div><div class="value">{{ o.accepted }}</div><div class="muted">by provider</div></div>
+  <div class="card"><div class="label">Failed</div><div class="value">{{ o.failed }}</div><div class="muted">{{ '%.1f'|format(o.failure_rate * 100) }}% of settled</div></div>
+  <div class="card"><div class="label">Pending</div><div class="value">{{ o.pending }}</div>
+    <div class="muted">{% if o.queue.oldest_pending_seconds %}oldest {{ (o.queue.oldest_pending_seconds / 60)|round|int }} min{% else %}queue empty{% endif %}</div></div>
+  <div class="card"><div class="label">Needs review</div>
+    <div class="value" {% if o.queue.needs_review %}style="color:var(--bad)"{% endif %}>{{ o.queue.needs_review }}</div>
+    <div class="muted">unrecognised responses</div></div>
+</div>
+
+<p class="muted" style="margin-top:.9rem;font-size:.85rem">
+  <strong>Accepted</strong> means the provider took custody. It does not mean delivered —
+  bad external recipients are accepted at RCPT and bounce out of band.
+</p>
+
+<h2>Provider latency</h2>
+{% if o.latency_ms.samples %}
+<div class="cards">
+  <div class="card"><div class="label">p50</div><div class="value">{{ o.latency_ms.p50|round|int }}<span style="font-size:.8rem"> ms</span></div></div>
+  <div class="card"><div class="label">p95</div><div class="value">{{ o.latency_ms.p95|round|int }}<span style="font-size:.8rem"> ms</span></div></div>
+  <div class="card"><div class="label">max</div><div class="value">{{ o.latency_ms.max|round|int }}<span style="font-size:.8rem"> ms</span></div></div>
+  <div class="card"><div class="label">samples</div><div class="value">{{ o.latency_ms.samples }}</div></div>
+</div>
+<p class="muted" style="font-size:.85rem">The first send on a connection includes TLS and AUTH; connections are reused up to the server's MAILMAX.</p>
+{% else %}<div class="empty">Nothing sent in this window.</div>{% endif %}
+
+<h2>Hourly headroom</h2>
+<p class="muted" style="font-size:.85rem;margin-top:-.3rem">
+  Over-limit is a permanent rejection with no provider-side queue, so this gate holds messages back rather than letting them fail.
+</p>
+{% if o.rate_headroom %}
+<table>
+  <tr><th>Sender identity</th><th>Used this hour</th><th>Our gate</th><th>Provider wall</th><th style="width:30%">Utilisation</th></tr>
+  {% for r in o.rate_headroom %}
+  <tr>
+    <td class="mono">{{ r.sender }}</td>
+    <td>{{ r.used_this_hour }}</td>
+    <td>{{ r.our_ceiling }}</td>
+    <td class="muted">{{ r.provider_ceiling }}</td>
+    <td><div class="bar"><span style="width:{{ (r.utilisation * 100)|round|int }}%"></span></div></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<div class="empty">No sender identities provisioned.</div>{% endif %}
+
+<h2>Workers</h2>
+{% if o.workers %}
+<table>
+  <tr><th>Worker</th><th>Status</th><th>Last seen</th><th>Processed</th><th>Version</th></tr>
+  {% for w in o.workers %}
+  <tr>
+    <td class="mono">{{ w.worker_id }}</td>
+    <td><span class="pill {{ 'ok' if w.alive else 'bad' }}">{{ 'alive' if w.alive else 'STALE' }}</span></td>
+    <td>{{ w.last_seen_seconds_ago|round|int }}s ago</td>
+    <td>{{ w.messages_processed }}</td>
+    <td class="muted mono">{{ w.version or '—' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="banner bad">No worker has ever reported. Nothing will be delivered until one runs.</div>
+{% endif %}
+
+{% if o.failures_by_class %}
+<h2>Failures by class</h2>
+<table>
+  <tr><th>Class</th><th>Count</th></tr>
+  {% for name, count in o.failures_by_class.items() %}
+  <tr><td class="mono">{{ name }}</td><td>{{ count }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<h2>Volume by domain</h2>
+{% if o.by_domain %}
+<table>
+  <tr><th>Domain</th><th>Requested</th><th>Accepted</th><th>Failed</th><th>Failure rate</th></tr>
+  {% for d in o.by_domain %}
+  <tr><td class="mono">{{ d.name }}</td><td>{{ d.requested }}</td><td>{{ d.accepted }}</td>
+      <td>{{ d.failed }}</td><td>{{ '%.1f'|format(d.failure_rate * 100) }}%</td></tr>
+  {% endfor %}
+</table>
+{% else %}<div class="empty">No messages in this window.</div>{% endif %}
+{% endblock %}

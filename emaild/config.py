@@ -46,6 +46,10 @@ def _env_file_for_process() -> str | None:
       EMAILD_ENV_FILE=none          -- read the process environment only
       EMAILD_ENV_FILE=.env.worker   -- read a role-scoped file
       (unset)                       -- read .env, the compose/admin default
+
+    NOTE: this is evaluated when the Settings class is DEFINED, so the variable
+    must be set before `emaild.config` is first imported. Setting it later has
+    no effect. See tests/conftest.py, which relies on exactly this.
     """
     override = os.environ.get("EMAILD_ENV_FILE")
     if override is None:
@@ -90,6 +94,14 @@ class Settings(BaseSettings):
 
     # --- Network ---
     trusted_proxy_hosts: str = ""
+
+    # --- Dashboard ---
+    dashboard_enabled: bool = True
+    dashboard_token: str | None = None
+    # Explicit acknowledgement that something in front (Cloudflare Access) is
+    # authenticating the dashboard. Required to serve it unauthenticated in
+    # production -- see the validator below.
+    dashboard_behind_proxy_auth: bool = False
 
     @property
     def effective_hourly_limit(self) -> int:
@@ -175,6 +187,25 @@ class Settings(BaseSettings):
 
         if self.env is Environment.PRODUCTION and "CHANGEME" in self.database_url:
             raise ValueError("refusing to start in production with a placeholder database password")
+
+        # Fail closed. The dashboard shows recipient addresses, subjects, and
+        # volume -- real data. In development it binds to localhost and needs no
+        # gate, but in production an unauthenticated dashboard must be a
+        # deliberate, stated decision rather than an oversight.
+        if (
+            self.role is Role.API
+            and self.env is Environment.PRODUCTION
+            and self.dashboard_enabled
+            and not self.dashboard_token
+            and not self.dashboard_behind_proxy_auth
+        ):
+            raise ValueError(
+                "refusing to serve an unauthenticated dashboard in production. "
+                "Either set EMAILD_DASHBOARD_TOKEN, or set "
+                "EMAILD_DASHBOARD_BEHIND_PROXY_AUTH=true to confirm Cloudflare "
+                "Access (or equivalent) is authenticating it. To turn the "
+                "dashboard off entirely, set EMAILD_DASHBOARD_ENABLED=false."
+            )
 
         return self
 
