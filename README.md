@@ -7,11 +7,12 @@ Sends through MXRoute over SMTP. Applications never see SMTP credentials.
 
 ## Status
 
-**Phase 4 of 9 — ingest API.** The full path from an HTTP request to a durably
-queued message, with the domain/mailbox lifecycle and scoped keys behind it.
+**Phase 5 of 9 — it sends.** The complete journey works end to end: a request
+becomes a durable row, a worker claims it, the rate gate clears it, and MXRoute
+accepts it — with an honest timeline at every step.
 
-Nothing is delivered yet — the worker lands in Phase 5, so messages accumulate
-in `queued`. See `build_plan.md`.
+Remaining: suppression (6), observability (7), dashboard (8), production
+packaging (9). See `build_plan.md`.
 
 ```bash
 curl -X POST http://localhost:8000/v1/emails \
@@ -34,10 +35,16 @@ mean sent, and it certainly does not mean delivered.
 
 Then read the honest timeline:
 
-```bash
-curl -H "Authorization: Bearer em_live_..." \
-  http://localhost:8000/v1/emails/email_01KZDBG61EAKBX5G64TM8V8T3Y
 ```
+api.accepted        recipients=1 size_bytes=2283
+message.queued      message_id_header=<email_01KZ...@example.com>
+delivery.attempt    attempt=1 host=chocobo.mxrouting.net
+provider.accepted   code=250 response="OK id=1wsDhE-00000008tKT-28PB"
+```
+
+`accepted_by_provider` is terminal and means MXRoute took custody. It does
+**not** mean delivered — bad external recipients are accepted at RCPT and bounce
+out of band, so that is the honest limit of what we can prove.
 
 Working today, via the admin CLI:
 

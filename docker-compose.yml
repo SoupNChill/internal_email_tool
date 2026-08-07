@@ -101,7 +101,10 @@ services:
       # provision mailboxes.
     # No ports. The worker has no listener -- outbound SMTP only.
     command: ["python", "-m", "emaild.worker"]
-    profiles: ["worker"]  # Phase 5. Enabled once emaild/worker.py exists.
+    # Graceful shutdown (first_production_packaging §14): the worker stops
+    # claiming on SIGTERM and lets in-flight sends finish. Anything still
+    # claimed if it is killed harder is recovered by the reaper.
+    stop_grace_period: 45s
 
   # Public exposure. Opt-in, and the only service that reaches the internet.
   cloudflared:

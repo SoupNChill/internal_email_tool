@@ -372,6 +372,12 @@ class Message(Base):
         Integer, default=0, server_default=text("0"), nullable=False
     )
 
+    # Send accounting. Set when an SMTP attempt BEGINS, regardless of outcome,
+    # because the rate limiter must be conservative: counting only successes
+    # would let a burst of retries sail past the provider's ceiling, and
+    # over-limit there is an unrecoverable 5xx.
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     # Queue mechanics
     attempts: Mapped[int] = mapped_column(
         Integer, default=0, server_default=text("0"), nullable=False
@@ -419,6 +425,9 @@ class Message(Base):
             postgresql_where="body_purged_at IS NULL AND completed_at IS NOT NULL",
         ),
         Index("ix_messages_project_created", "project_id", "created_at"),
+        # The rate limiter's hot query: how many attempts for this sender
+        # identity inside the rolling hour?
+        Index("ix_messages_rate_window", "mailbox_id", "last_attempt_at"),
         Index("ix_messages_needs_review", "needs_review", postgresql_where="needs_review"),
     )
 
