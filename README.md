@@ -7,19 +7,36 @@ Sends through MXRoute over SMTP. Applications never see SMTP credentials.
 
 ## Status
 
-**Phase 3 of 9 — authorization.** Schema, config, health endpoints, container
-setup, the full domain/mailbox lifecycle against the live MXRoute API, and
-scoped API-key authentication.
+**Phase 4 of 9 — ingest API.** The full path from an HTTP request to a durably
+queued message, with the domain/mailbox lifecycle and scoped keys behind it.
 
-Still cannot send: the ingest API lands in Phase 4 and the delivery worker in
-Phase 5. See `build_plan.md`.
-
-Check a key works:
+Nothing is delivered yet — the worker lands in Phase 5, so messages accumulate
+in `queued`. See `build_plan.md`.
 
 ```bash
-curl -H "Authorization: Bearer em_live_..." http://localhost:8000/v1/me
-{"project":"billing","key_name":"...","allowed_senders":["noreply@example.com"],
- "allowed_domains":["example.com"]}
+curl -X POST http://localhost:8000/v1/emails \
+  -H "Authorization: Bearer em_live_..." \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-42" \
+  -d '{
+    "from": "Acme <noreply@example.com>",
+    "to": "customer@example.net",
+    "subject": "Verify your email",
+    "html": "<p>...</p>",
+    "text": "..."
+  }'
+
+{"id":"email_01KZDBG61EAKBX5G64TM8V8T3Y","status":"queued"}
+```
+
+`queued` means the row is committed and a worker will pick it up. It does not
+mean sent, and it certainly does not mean delivered.
+
+Then read the honest timeline:
+
+```bash
+curl -H "Authorization: Bearer em_live_..." \
+  http://localhost:8000/v1/emails/email_01KZDBG61EAKBX5G64TM8V8T3Y
 ```
 
 Working today, via the admin CLI:

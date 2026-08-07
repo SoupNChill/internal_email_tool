@@ -165,7 +165,11 @@ The core. 3–4 days.
 **Rescoped down.** ~1 day. At dev-tool volume the original framing overweighted this.
 
 Ships now:
-- **The VERP return-path scheme, pinned.** Non-negotiable and cheap — changing it later invalidates the envelope of every message already sent.
+- ~~The VERP return-path scheme, pinned.~~ **Cancelled — not possible.** MXRoute
+  rejects plus-addressed envelope senders exactly as it rejects any other mismatch
+  (`spike_results.md`, Finding 1a), so a per-message return-path tag cannot exist.
+  Replaced by `Message-ID` attribution, authored at ingest in Phase 4 as
+  `<{public_id}@{domain}>`. Nothing left to pin here.
 - **Suppression table, checked at ingest.** Populated by hand initially. Since bad external addresses come back `250 Accepted` (`spike_results.md`, Finding 2), this is the only brake that exists.
 
 Deferred until volume justifies it: catch-all/forwarder provisioning, automated bounce parsing, and complaint handling. The hooks exist in the API whenever they're wanted.
@@ -174,7 +178,10 @@ Deferred until volume justifies it: catch-all/forwarder provisioning, automated 
 
 **Do not defer the envelope design.**
 
-Pin the VERP return-path scheme now — changing it later invalidates the envelope of every in-flight message. Bounce *processing* can lag; the scheme cannot.
+~~Pin the VERP return-path scheme now.~~ Superseded: VERP is unavailable on this
+provider. Bounce attribution runs off the `Message-ID` header instead, which
+Phase 4 already authors — so there is no longer anything here that must be
+decided before sending starts.
 
 Suppression is checked at ingest from Phase 4 onward, initially populated by hand. Automatic population arrives when bounce collection does, via catch-all/forwarders — both already provisionable through the API.
 
@@ -261,7 +268,7 @@ Phase 2  Control plane         ▓▓▓ 2–3d
 Phase 3  Authorization         ▓ 1d
 Phase 4  Ingest API            ▓▓ 2d
 Phase 5  Delivery worker       ▓▓▓▓ 3–4d
-Phase 6  Suppression + VERP    ▓ 1d       (rescoped down)
+Phase 6  Suppression           ▓ 1d       (rescoped; VERP cancelled)
 Phase 7  Observability         ▓▓ 2d
 ─────────────────────────────────────── first perfect mile
 Phase 8  Dashboard + snippets  ▓▓▓ 2–3d

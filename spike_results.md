@@ -57,6 +57,37 @@ MXRoute enforces that `MAIL FROM` equals the authenticated mailbox **exactly**. 
 
 MXRoute enforcing this is a gift, not an obstacle: it makes sender spoofing impossible at the protocol level rather than something our authorization layer has to get right alone.
 
+## Finding 1a — VERP is unavailable (tested 2026-08-07)
+
+A follow-up probe, because the whole bounce design depended on it:
+
+| Envelope sender | Result |
+|---|---|
+| `noreply@domain` (exact login) | **250 Accepted** |
+| `noreply+email01JABCDEF@domain` | **550** must match your login |
+| `noreply+bounces@domain` | **550** must match your login |
+| `bounce@domain` | **550** must match your login |
+
+Plus-addressing is rejected exactly as a different local part is. "Must match
+your login" means byte-identical, with no subaddressing exemption.
+
+**Consequence: the VERP return-path scheme planned for Phase 6 cannot be built.**
+The envelope sender is forced to equal the mailbox address, so bounces cannot
+carry a per-message tag in the return path.
+
+**Replacement: attribute bounces by `Message-ID`.** We author the header as
+`<{public_id}@{sending_domain}>`, and because `public_id` is already unique and
+indexed, a DSN quoting the original Message-ID resolves to its message with one
+lookup. No extra column, and nothing to migrate later.
+
+Bounces will arrive in the sending mailbox itself, since that is now the only
+possible return path. Whoever builds bounce processing reads that mailbox over
+IMAP and parses the DSN rather than reading a tag off the envelope.
+
+Worth noting this was only discoverable by trying it: the constraint is
+documented nowhere, and the plus-addressing case is the sort of thing that is
+usually exempt.
+
 ## Finding 2 — external recipients are accepted without validation
 
 `nobody@nonexistent-domain-xyz-99823.invalid` returned **250 Accepted** at RCPT TO.

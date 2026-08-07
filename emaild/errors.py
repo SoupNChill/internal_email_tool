@@ -85,6 +85,37 @@ class RateLimitError(ApiError):
     error_type = "rate_limit_exceeded"
 
 
+async def validation_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Normalise FastAPI's own 422 into our error shape.
+
+    Without this an integrator sees two different error contracts depending on
+    whether the request failed schema validation or business validation, which
+    is exactly the kind of inconsistency that makes an API annoying to write
+    against -- and that an AI generating client code will get wrong.
+    """
+    errors: list[dict[str, Any]] = getattr(exc, "errors", lambda: [])()
+    first: dict[str, Any] = errors[0] if errors else {}
+    location = [str(p) for p in first.get("loc", []) if p not in ("body", "query", "header")]
+    param = ".".join(location) or None
+    message = first.get("msg", "Request body failed validation.")
+
+    # Pydantic prefixes messages with "Value error, " for custom validators.
+    message = message.removeprefix("Value error, ")
+    if param and param not in message:
+        message = f"{message} (field: {param})"
+
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error": {
+                "type": "validation_error",
+                "message": message,
+                **({"param": param} if param else {}),
+            }
+        },
+    )
+
+
 async def api_error_handler(request: Request, exc: Exception) -> JSONResponse:
     # Starlette types handlers against bare Exception. Narrow explicitly rather
     # than asserting -- asserts vanish under `python -O`, which would turn a
