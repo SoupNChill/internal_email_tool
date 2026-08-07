@@ -1,0 +1,154 @@
+name: Release
+
+# §21 and §31: publishing requires explicit authorisation. Two gates:
+#
+#   1. A version tag must be pushed deliberately -- merging to main never
+#      publishes anything.
+#   2. The `release` environment can carry a required reviewer, so the push to
+#      the registry waits for a human even after the tag exists.
+#
+# §30: this is the ONLY workflow with packages:write. CI has none.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (must match emaild/__init__.py)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify the version matches source
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version agreement
+        id: check
+        run: |
+          source_version="$(grep -oP '__version__ = "\K[^"]+' emaild/__init__.py)"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            requested="${{ inputs.version }}"
+          else
+            requested="${GITHUB_REF_NAME#v}"
+          fi
+
+          # §21 step 2. A tag that disagrees with the source produces an image
+          # whose /version lies about what is inside it -- and that lie is
+          # permanent once published.
+          if [ "$source_version" != "$requested" ]; then
+            echo "::error::tag/input says '$requested' but emaild/__init__.py says '$source_version'"
+            exit 1
+          fi
+          echo "version=$source_version" >> "$GITHUB_OUTPUT"
+          echo "publishing $source_version"
+
+      - name: Refuse a mutable tag
+        run: |
+          case "${{ steps.check.outputs.version }}" in
+            latest|stable|main|dev)
+              echo "::error::'${{ steps.check.outputs.version }}' is a mutable alias, not a version (§2)"
+              exit 1 ;;
+          esac
+          echo "version is not a mutable alias"
+
+  tests:
+    name: Full test suite
+    needs: verify
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.2-bookworm
+        env:
+          POSTGRES_USER: emaild
+          POSTGRES_PASSWORD: testpw
+          POSTGRES_DB: emaild_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U emaild -d emaild_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check . && ruff format --check . && mypy emaild
+      - env:
+          EMAILD_TEST_DATABASE_URL: postgresql+asyncpg://emaild:testpw@localhost:5432/emaild_test
+        run: pytest -q
+      - run: ./scripts/secret-scan.sh
+
+  publish:
+    name: Build once and publish
+    needs: [verify, tests]
+    runs-on: ubuntu-latest
+    # Add a required reviewer to this environment in repository settings to
+    # make publication need a human even after the tag is pushed (§31).
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # §3: build the artifact ONCE. A rebuilt image is a different artifact
+      # even from the same commit, so the thing tested must be the thing pushed.
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/emaild:${{ needs.verify.outputs.version }}
+          build-args: |
+            APP_VERSION=${{ needs.verify.outputs.version }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ github.event.repository.updated_at }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.verify.outputs.version }}
+
+      # §21 step 7 and §55: the digest is what an installation records, because
+      # a tag can be moved and a digest cannot.
+      - name: Record the digest
+        run: |
+          echo "### emaild ${{ needs.verify.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '| | |' >> "$GITHUB_STEP_SUMMARY"
+          echo '|---|---|' >> "$GITHUB_STEP_SUMMARY"
+          echo '| image | `ghcr.io/${{ github.repository_owner }}/emaild:${{ needs.verify.outputs.version }}` |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| digest | `${{ steps.build.outputs.digest }}` |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| commit | `${{ github.sha }}` |' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Install:' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo './install.sh --version ${{ needs.verify.outputs.version }} --lan' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke-test the published image
+        run: |
+          image="ghcr.io/${{ github.repository_owner }}/emaild:${{ needs.verify.outputs.version }}"
+          docker pull "$image"
+          reported="$(docker run --rm --entrypoint python "$image" -c 'import emaild;print(emaild.__version__)')"
+          [ "$reported" = "${{ needs.verify.outputs.version }}" ] \
+            || { echo "::error::published image reports $reported"; exit 1; }
+          echo "published image reports $reported"
