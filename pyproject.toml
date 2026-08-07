@@ -38,6 +38,11 @@ packages = ["emaild"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# release_rules §7: a released migration must not change -- not its content, not
+# its checksum. A formatter sweeping the tree would rewrite them silently on
+# some unrelated commit, so the tooling is prevented from touching them at all
+# rather than relying on anyone remembering.
+extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "S"]
