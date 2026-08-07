@@ -7,12 +7,13 @@ Sends through MXRoute over SMTP. Applications never see SMTP credentials.
 
 ## Status
 
-**Phase 5 of 9 — it sends.** The complete journey works end to end: a request
-becomes a durable row, a worker claims it, the rate gate clears it, and MXRoute
-accepts it — with an honest timeline at every step.
+**Phase 6 of 9 — suppression.** The complete journey works end to end: a
+request becomes a durable row, a worker claims it, the rate gate clears it, and
+MXRoute accepts it — with an honest timeline at every step. Addresses the
+provider tells us are dead are recorded and refused thereafter.
 
-Remaining: suppression (6), observability (7), dashboard (8), production
-packaging (9). See `build_plan.md`.
+Remaining: observability (7), dashboard (8), production packaging (9). See
+`build_plan.md`.
 
 ```bash
 curl -X POST http://localhost:8000/v1/emails \
@@ -129,6 +130,30 @@ convention:
 A compromise of the internet-facing surface therefore yields sending within
 existing key scopes — not the ability to delete mailboxes or touch reseller
 users. Starting a role with a secret it must not have is a hard failure.
+
+## Suppression
+
+The only brake that exists. Bad external recipients come back `250 Accepted` and
+bounce out of band, so nothing else stops us mailing a dead address forever.
+
+Permissions are deliberately asymmetric:
+
+| Direction | Who | Why |
+|---|---|---|
+| **Add** — `POST /v1/suppressions` or CLI | any API key | Fails closed: worst case we stop mailing someone we could have. |
+| **Remove** — CLI only, and `--yes` required | operator | Fails open: resumes mail to an address we had reason to distrust. |
+
+Addresses are also suppressed automatically when the provider rejects a
+recipient as nonexistent — the one bounce signal available synchronously. The
+bar is deliberately high: policy rejections, reputation blocks, and our own
+misconfigurations never suppress a recipient, because a wrong entry silently
+stops legitimate mail and nobody notices until they complain.
+
+```bash
+python -m emaild.admin suppressions list
+python -m emaild.admin suppressions add dead@example.net --reason "hard bounce"
+python -m emaild.admin suppressions remove dead@example.net --yes
+```
 
 ## Provider constraints that shape the design
 

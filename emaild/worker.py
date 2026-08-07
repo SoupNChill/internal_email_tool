@@ -37,12 +37,14 @@ from emaild.config import Role, Settings, get_settings
 from emaild.crypto import MailboxCipher
 from emaild.db import dispose_engine, init_engine, session_scope
 from emaild.delivery.base import DeliveryAdapter, DeliveryResult, OutboundMessage
+from emaild.delivery.bounce import should_suppress, suppression_reason
 from emaild.delivery.classify import Verdict, classify
 from emaild.delivery.smtp import ServerLimits, SmtpAdapter
 from emaild.ingest import purge_expired_bodies
 from emaild.logging_config import configure_logging
-from emaild.models import Domain, Event, Mailbox, Message, MessageStatus
+from emaild.models import Domain, Event, Mailbox, Message, MessageStatus, SuppressionSource
 from emaild.ratelimit import current_budget, next_window_opening
+from emaild.suppressions import InvalidAddress, add_suppression
 
 log = logging.getLogger(__name__)
 
@@ -255,10 +257,62 @@ class Worker:
                 len(result.accepted_recipients),
                 f" ({len(result.refused)} refused)" if result.refused else "",
             )
+            # A partial success still names dead addresses -- and those per-
+            # recipient refusals are the clearest evidence we ever get. Skipping
+            # them here would mean the strongest signal is the one we ignore.
+            await self._suppress_dead_recipients(session, message, result)
             return
 
         verdict = classify(result.code, result.response)
         await self._apply_failure(session, message, result, verdict, attempt)
+        await self._suppress_dead_recipients(session, message, result)
+
+    async def _suppress_dead_recipients(
+        self,
+        session: AsyncSession,
+        message: Message,
+        result: DeliveryResult,
+    ) -> None:
+        """Record addresses the provider told us do not exist.
+
+        The only bounce signal available synchronously. Deliberately narrow --
+        see delivery/bounce.py for why the bar is set where it is.
+        """
+        candidates: list[tuple[str, int | None, str | None]] = [
+            (addr, code, text) for addr, (code, text) in result.refused.items()
+        ]
+        if not candidates and not result.success:
+            # A whole-message failure with no per-recipient detail. Only act when
+            # the message had exactly one recipient, since otherwise we cannot
+            # tell which address the rejection was about.
+            recipients = list(message.to_addresses or []) + list(message.cc_addresses or [])
+            if len(recipients) == 1 and not message.bcc_addresses:
+                candidates = [(recipients[0], result.code, result.response)]
+
+        for address, code, text in candidates:
+            # Classify each refusal on its own terms. A message-level verdict
+            # would be wrong here: in a partial success the message succeeded
+            # while this individual recipient was rejected outright.
+            klass = classify(code, text).failure_class
+            if not should_suppress(code, text, klass):
+                continue
+            try:
+                _, created = await add_suppression(
+                    session,
+                    address,
+                    source=SuppressionSource.BOUNCE,
+                    reason=suppression_reason(code, text),
+                )
+            except InvalidAddress:
+                continue
+            if created:
+                await _emit(
+                    session,
+                    message,
+                    "recipient.suppressed",
+                    {"address": address, "code": code, "response": (text or "")[:160]},
+                )
+                log.warning("auto-suppressed %s after %s %s", address, code, (text or "")[:80])
 
     async def _apply_failure(
         self,

@@ -7,6 +7,7 @@ sounds reassuring.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header
@@ -14,17 +15,27 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from emaild.api.schemas import (
+    AddSuppressionRequest,
     EventView,
     MessageView,
     SendEmailRequest,
     SendEmailResponse,
+    SuppressionListView,
+    SuppressionView,
 )
 from emaild.auth import Principal, require_principal
 from emaild.config import get_settings
 from emaild.db import session_scope
 from emaild.errors import ApiError
+from emaild.errors import ValidationError as ApiValidationError
 from emaild.ingest import ingest_message
-from emaild.models import Message
+from emaild.models import Message, SuppressionSource
+from emaild.suppressions import (
+    InvalidAddress,
+    add_suppression,
+    count_suppressions,
+    list_suppressions,
+)
 
 router = APIRouter(prefix="/v1", tags=["v1"])
 
@@ -126,4 +137,63 @@ async def get_email(email_id: str, principal: AuthedPrincipal) -> MessageView:
             failure_code=message.failure_code,
             provider_response=message.provider_response,
             events=events,
+        )
+
+
+# --- suppressions ----------------------------------------------------------
+#
+# The permissions here are deliberately asymmetric.
+#
+# Adding a suppression fails CLOSED: the worst case is that we stop mailing
+# someone we could have mailed. Any API key may do it.
+#
+# Removing one fails OPEN: it resumes mail to an address we previously had
+# reason to distrust, and at worst re-starts sending to a dead address that
+# damages reputation on shared IPs. That direction is operator-only, via the
+# admin CLI. See emaild/suppressions.py.
+
+
+@router.get("/suppressions", response_model=SuppressionListView)
+async def get_suppressions(
+    principal: AuthedPrincipal, limit: int = 100, offset: int = 0
+) -> SuppressionListView:
+    async with session_scope() as session:
+        rows = await list_suppressions(session, limit=limit, offset=offset)
+        total = await count_suppressions(session)
+    return SuppressionListView(
+        total=total,
+        data=[
+            SuppressionView(
+                address=r.address,
+                source=r.source.value,
+                reason=r.reason,
+                created_at=r.created_at.isoformat(),
+            )
+            for r in rows
+        ],
+    )
+
+
+@router.post("/suppressions", response_model=SuppressionView, status_code=201)
+async def create_suppression(
+    request: AddSuppressionRequest, principal: AuthedPrincipal
+) -> SuppressionView:
+    """Suppress an address. Idempotent -- re-suppressing is a no-op, not an error."""
+    async with session_scope() as session:
+        try:
+            record, _created = await add_suppression(
+                session,
+                request.address,
+                source=SuppressionSource.MANUAL,
+                reason=request.reason or f"added via API by project {principal.project_name}",
+            )
+        except InvalidAddress as exc:
+            raise ApiValidationError(str(exc), param="address") from None
+        return SuppressionView(
+            address=record.address,
+            source=record.source.value,
+            reason=record.reason,
+            created_at=record.created_at.isoformat()
+            if record.created_at
+            else datetime.now(UTC).isoformat(),
         )

@@ -44,6 +44,13 @@ from emaild.provisioning import (
     provision_mailbox,
     rotate_mailbox_password,
 )
+from emaild.suppressions import (
+    InvalidAddress,
+    add_suppression,
+    count_suppressions,
+    list_suppressions,
+    remove_suppression,
+)
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -356,6 +363,76 @@ async def cmd_keys_list(args: argparse.Namespace, settings: Settings) -> int:
     return EXIT_OK
 
 
+# --- suppressions ----------------------------------------------------------
+
+
+async def cmd_suppressions_list(args: argparse.Namespace, settings: Settings) -> int:
+    async with session_scope() as session:
+        rows = await list_suppressions(session, limit=args.limit)
+        total = await count_suppressions(session)
+    if not rows:
+        print("No suppressions.")
+        return EXIT_OK
+    print(
+        _table(
+            [
+                [
+                    r.address,
+                    r.source.value,
+                    (r.reason or "-")[:60],
+                    r.created_at.strftime("%Y-%m-%d %H:%M"),
+                ]
+                for r in rows
+            ],
+            ["ADDRESS", "SOURCE", "REASON", "ADDED"],
+        )
+    )
+    print(f"\nShowing {len(rows)} of {total}.")
+    return EXIT_OK
+
+
+async def cmd_suppressions_add(args: argparse.Namespace, settings: Settings) -> int:
+    async with session_scope() as session:
+        try:
+            record, created = await add_suppression(
+                session, args.address, reason=args.reason or "added by operator"
+            )
+        except InvalidAddress as exc:
+            print(f"Failed: {exc}", file=sys.stderr)
+            return EXIT_FAILED
+    print(
+        f"Suppressed {record.address}"
+        if created
+        else f"{record.address} was already suppressed (source={record.source.value})"
+    )
+    return EXIT_OK
+
+
+async def cmd_suppressions_remove(args: argparse.Namespace, settings: Settings) -> int:
+    """Operator-only. This is the direction that fails OPEN."""
+    async with session_scope() as session:
+        try:
+            existing = await list_suppressions(session, limit=1000)
+        except InvalidAddress as exc:
+            print(f"Failed: {exc}", file=sys.stderr)
+            return EXIT_FAILED
+        match = next((r for r in existing if r.address == args.address.strip().lower()), None)
+        if match is None:
+            print(f"Not suppressed: {args.address}", file=sys.stderr)
+            return EXIT_FAILED
+
+        if not args.yes:
+            print(f"About to resume sending to {match.address}")
+            print(f"  suppressed {match.created_at:%Y-%m-%d %H:%M} (source={match.source.value})")
+            print(f"  reason: {match.reason or '-'}")
+            print("\nRe-run with --yes to confirm.")
+            return EXIT_USAGE
+
+        removed = await remove_suppression(session, args.address)
+    print(f"Removed suppression for {args.address}" if removed else "Nothing removed")
+    return EXIT_OK
+
+
 # --- wiring ----------------------------------------------------------------
 
 
@@ -420,6 +497,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project", required=True)
     p.add_argument("--mailbox", required=True, action="append", help="repeatable; scopes the key")
     p.set_defaults(fn=cmd_keys_create)
+
+    sup = sub.add_parser("suppressions", help="addresses we refuse to send to").add_subparsers(
+        dest="cmd", required=True
+    )
+    p = sup.add_parser("list")
+    p.add_argument("--limit", type=int, default=100)
+    p.set_defaults(fn=cmd_suppressions_list)
+    p = sup.add_parser("add")
+    p.add_argument("address")
+    p.add_argument("--reason", default=None)
+    p.set_defaults(fn=cmd_suppressions_add)
+    p = sup.add_parser("remove", help="resume sending to an address (operator-only)")
+    p.add_argument("address")
+    p.add_argument("--yes", action="store_true", help="confirm; this direction fails open")
+    p.set_defaults(fn=cmd_suppressions_remove)
 
     return parser
 

@@ -31,7 +31,8 @@ from ulid import ULID
 from emaild.api.schemas import MAX_MESSAGE_BYTES, MAX_RECIPIENTS, SendEmailRequest
 from emaild.auth import Principal, authorize_sender
 from emaild.errors import ApiError, SuppressedRecipient, ValidationError
-from emaild.models import Event, IdempotencyKey, Message, MessageStatus, Suppression
+from emaild.models import Event, IdempotencyKey, Message, MessageStatus
+from emaild.suppressions import find_suppressed
 
 log = logging.getLogger(__name__)
 
@@ -125,15 +126,9 @@ def canonical_request_hash(payload: dict) -> str:
 
 
 async def _check_suppressions(session: AsyncSession, recipients: list[str]) -> None:
-    rows = (
-        (
-            await session.execute(
-                select(Suppression.address).where(Suppression.address.in_(recipients))
-            )
-        )
-        .scalars()
-        .all()
-    )
+    # Uses the shared normaliser rather than a local comparison: a suppressed
+    # address stored one way must block the same address sent another way.
+    rows = await find_suppressed(session, recipients)
     if rows:
         # Refusing the whole request rather than silently dropping the suppressed
         # recipients. Partial delivery reported as success is exactly the theatre

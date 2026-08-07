@@ -128,3 +128,22 @@ class MessageView(BaseModel):
     failure_code: int | None = None
     provider_response: str | None = None
     events: list[EventView]
+
+
+class AddSuppressionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    address: str = Field(min_length=3)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class SuppressionView(BaseModel):
+    address: str
+    source: str
+    reason: str | None
+    created_at: str
+
+
+class SuppressionListView(BaseModel):
+    total: int
+    data: list[SuppressionView]
