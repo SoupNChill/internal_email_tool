@@ -97,6 +97,27 @@ services:
     command: ["python", "-m", "emaild.worker"]
     stop_grace_period: 45s
 
+  # Provisioning. Profile-gated so it NEVER starts on its own -- it exists to be
+  # invoked as a one-off by `appctl admin`. This is the only container that
+  # holds the MXRoute account-root credential, and it has no listener and no
+  # published port, so it is never reachable from anywhere.
+  admin:
+    image: *image
+    profiles: ["admin"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      EMAILD_ROLE: admin
+      EMAILD_ENV: production
+      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-emaild}
+      EMAILD_LOG_LEVEL: ${EMAILD_LOG_LEVEL:-WARNING}
+      EMAILD_MAILBOX_ENCRYPTION_KEY: ${EMAILD_MAILBOX_ENCRYPTION_KEY:-}
+      EMAILD_MXROUTE_SERVER: ${EMAILD_MXROUTE_SERVER:-}
+      EMAILD_MXROUTE_USERNAME: ${EMAILD_MXROUTE_USERNAME:-}
+      EMAILD_MXROUTE_API_KEY: ${EMAILD_MXROUTE_API_KEY:-}
+    entrypoint: ["python", "-m", "emaild.admin"]
+
   # Opt-in. Gives HTTPS and a hostname reachable from outside the LAN --
   # necessary the day a product moves to a VPS, because it will not be able to
   # reach a LAN-only emaild and mail stops silently rather than erroring.

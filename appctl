@@ -133,6 +133,15 @@ cmd_health() {
 
 cmd_logs() { compose logs "${@:---tail=100}" ; }
 
+# Provisioning commands. Runs a one-off container in the admin role, because the
+# api and worker containers deliberately do NOT hold the MXRoute account-root
+# credential -- running these inside them is refused at startup, by design.
+cmd_admin() {
+  require_env
+  [ $# -gt 0 ] || { err "usage: appctl admin <command> [args]"; exit "$EX_USAGE"; }
+  compose run --rm --no-deps admin "$@"
+}
+
 # ---------------------------------------------------------------------------
 # config-check -- run the fail-closed checks BEFORE an upgrade, not at startup
 # ---------------------------------------------------------------------------
@@ -430,6 +439,7 @@ appctl -- operator control for emaild
   version                    running version, commit, schema
   health                     ready check; exit 1 when unhealthy
   logs [args]                docker compose logs passthrough
+  admin <cmd> [args]         provisioning: domains, mailboxes, keys, suppressions
   config-check               validate .env before an upgrade
   backup [--to DIR]          consistent dump + manifest + checksums
   restore ARCHIVE [--force]  restore; refuses to overwrite live data
@@ -447,6 +457,7 @@ case "${1:-}" in
   version)      shift; cmd_version "$@" ;;
   health)       shift; cmd_health "$@" ;;
   logs)         shift; cmd_logs "$@" ;;
+  admin)        shift; cmd_admin "$@" ;;
   config-check) shift; cmd_config_check "$@" ;;
   backup)       shift; cmd_backup "$@" ;;
   restore)      shift; cmd_restore "$@" ;;

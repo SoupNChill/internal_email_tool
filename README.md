@@ -116,6 +116,25 @@ credential, and never routed through the tunnel.
 
 ## Documents
 
+**Operators**
+
+| File | What it is |
+|---|---|
+| [docs/installation.md](docs/installation.md) | Installing on a clean host |
+| [docs/operations.md](docs/operations.md) | Day-to-day running |
+| [docs/backup-and-restore.md](docs/backup-and-restore.md) | **Read this one** |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom → cause → fix |
+| [docs/configuration.md](docs/configuration.md) | Every variable |
+| [docs/architecture-overview.md](docs/architecture-overview.md) | How it fits together |
+
+**Integrators**
+
+| File | What it is |
+|---|---|
+| [docs/integration.md](docs/integration.md) | The whole API. Paste it to a coding assistant. |
+
+**Background**
+
 | File | What it is |
 |---|---|
 | `vision.md` | What we're building and why |
@@ -123,6 +142,7 @@ credential, and never routed through the tunnel.
 | `spike_results.md` | Observed SMTP behaviour, and the failure taxonomy it seeds |
 | `build_plan.md` | The nine phases |
 | `deployment_and_release.md` | Where it runs, and which release rules bind |
+| `docs/distribution_audit.md` | Production-readiness audit and findings |
 | `release_rules/` | The standing release contract |
 
 ## Quick start
