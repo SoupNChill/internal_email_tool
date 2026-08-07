@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import sys
 from collections.abc import AsyncIterator, Callable, Coroutine
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -315,6 +316,24 @@ async def cmd_keys_create(args: argparse.Namespace, settings: Settings) -> int:
     return EXIT_OK
 
 
+async def cmd_keys_revoke(args: argparse.Namespace, settings: Settings) -> int:
+    """Revoke a key. Takes effect on the next request -- auth is never cached."""
+    async with session_scope() as session:
+        key = (
+            await session.execute(select(ApiKey).where(ApiKey.name == args.name))
+        ).scalar_one_or_none()
+        if key is None:
+            print(f"No such key: {args.name}", file=sys.stderr)
+            return EXIT_FAILED
+        if key.revoked_at is not None:
+            print(f"Key '{args.name}' was already revoked at {key.revoked_at:%Y-%m-%d %H:%M}")
+            return EXIT_OK
+        key.revoked_at = datetime.now(UTC)
+        key.active = False
+    print(f"Revoked '{args.name}'. Effective immediately -- authentication is not cached.")
+    return EXIT_OK
+
+
 async def cmd_keys_list(args: argparse.Namespace, settings: Settings) -> int:
     async with session_scope() as session:
         keys = (
@@ -393,6 +412,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     k = sub.add_parser("keys", help="scoped API keys").add_subparsers(dest="cmd", required=True)
     k.add_parser("list").set_defaults(fn=cmd_keys_list)
+    p = k.add_parser("revoke", help="revoke a key immediately")
+    p.add_argument("name")
+    p.set_defaults(fn=cmd_keys_revoke)
     p = k.add_parser("create")
     p.add_argument("name")
     p.add_argument("--project", required=True)

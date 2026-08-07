@@ -14,8 +14,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from emaild import __version__
+from emaild.api.v1 import router as v1_router
 from emaild.config import Role, get_settings
 from emaild.db import dispose_engine, init_engine
+from emaild.errors import ApiError, api_error_handler
 from emaild.health import router as health_router
 from emaild.logging_config import configure_logging
 
@@ -53,4 +55,6 @@ app = FastAPI(
     redoc_url=None,
 )
 
+app.add_exception_handler(ApiError, api_error_handler)
 app.include_router(health_router)
+app.include_router(v1_router)

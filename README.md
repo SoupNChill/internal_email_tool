@@ -7,11 +7,20 @@ Sends through MXRoute over SMTP. Applications never see SMTP credentials.
 
 ## Status
 
-**Phase 2 of 9 — control plane.** Schema, config, health endpoints, container
-setup, and the full domain/mailbox lifecycle against the live MXRoute API.
+**Phase 3 of 9 — authorization.** Schema, config, health endpoints, container
+setup, the full domain/mailbox lifecycle against the live MXRoute API, and
+scoped API-key authentication.
 
 Still cannot send: the ingest API lands in Phase 4 and the delivery worker in
 Phase 5. See `build_plan.md`.
+
+Check a key works:
+
+```bash
+curl -H "Authorization: Bearer em_live_..." http://localhost:8000/v1/me
+{"project":"billing","key_name":"...","allowed_senders":["noreply@example.com"],
+ "allowed_domains":["example.com"]}
+```
 
 Working today, via the admin CLI:
 
@@ -24,6 +33,7 @@ python -m emaild.admin mailboxes provision noreply@example.com
 python -m emaild.admin projects create billing
 python -m emaild.admin keys create billing-prod --project billing \
     --mailbox noreply@example.com
+python -m emaild.admin keys revoke billing-prod    # immediate; auth is not cached
 ```
 
 The CLI is `role=admin` — the only surface holding the MXRoute account-root
