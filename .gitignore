@@ -33,3 +33,6 @@ mxroute_information.md
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Backups contain a full database dump. Never commit them.
+backups/

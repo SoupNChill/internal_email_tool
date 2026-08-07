@@ -1,0 +1,453 @@
+#!/usr/bin/env bash
+#
+# appctl -- operator control for emaild.
+#
+# Deliberately a shell script rather than a Python entry point. §25 criterion 3
+# requires the destination server to work without application build tools or a
+# Python toolchain, so everything here runs through Docker Compose and the
+# database container. If you have Docker, you have appctl.
+#
+#   appctl start|stop|restart|status|version|health|logs
+#   appctl config-check
+#   appctl backup [--to DIR]
+#   appctl restore ARCHIVE [--force]
+#   appctl doctor
+#
+set -euo pipefail
+
+readonly BACKUP_FORMAT_VERSION=1
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Exit codes are meaningful so this works from cron or a check script.
+readonly EX_OK=0 EX_FAIL=1 EX_USAGE=2 EX_UNHEALTHY=1
+
+# Scratch directory. Script-level rather than local: the EXIT trap runs after
+# function locals have gone out of scope, and under `set -u` referencing one
+# there aborts the script -- after the work succeeded, which is the worst time.
+SCRATCH=""
+cleanup() { [ -n "${SCRATCH:-}" ] && rm -rf "$SCRATCH"; return 0; }
+trap cleanup EXIT
+
+err()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; }
+warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
+info() { printf '%s\n' "$*"; }
+ok()   { printf '\033[32m  ok\033[0m    %s\n' "$*"; }
+bad()  { printf '\033[31m  FAIL\033[0m  %s\n' "$*"; }
+
+die() { err "$*"; exit "$EX_FAIL"; }
+
+compose() { docker compose "$@"; }
+
+require_env() {
+  [ -f .env ] || die ".env not found in $SCRIPT_DIR. Copy .env.example and fill it in."
+}
+
+# Read one variable from .env WITHOUT sourcing the file -- sourcing would execute
+# whatever is in it and leak every value into this shell's environment.
+env_get() {
+  local key="$1"
+  sed -n "s/^${key}=//p" .env | head -1 | tr -d '\r'
+}
+
+pg_user() { local v; v="$(env_get POSTGRES_USER)"; printf '%s' "${v:-emaild}"; }
+pg_db()   { local v; v="$(env_get POSTGRES_DB)";   printf '%s' "${v:-emaild}"; }
+
+psql_q() {
+  compose exec -T postgres psql -U "$(pg_user)" -d "$(pg_db)" -tAc "$1" 2>/dev/null | tr -d '\r'
+}
+
+postgres_running() {
+  [ "$(compose ps --status running --services 2>/dev/null | grep -c '^postgres$')" -gt 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# lifecycle
+# ---------------------------------------------------------------------------
+
+cmd_start() {
+  require_env
+  info "Starting emaild..."
+  compose up -d
+  info ""
+  cmd_health || true
+}
+
+cmd_stop() {
+  info "Stopping emaild (workers finish in-flight sends first)..."
+  compose stop
+  ok "stopped"
+}
+
+cmd_restart() { cmd_stop; cmd_start; }
+
+cmd_status() {
+  require_env
+  compose ps --format 'table {{.Service}}\t{{.Status}}'
+  if postgres_running; then
+    info ""
+    compose exec -T api python -m emaild.admin status 2>/dev/null \
+      || warn "could not reach the admin CLI (is the api container up?)"
+  fi
+}
+
+cmd_version() {
+  local port; port="$(env_get API_HOST_PORT)"; port="${port:-8000}"
+  curl -fsS "http://127.0.0.1:${port}/version" 2>/dev/null \
+    || die "api not reachable on 127.0.0.1:${port}"
+  echo
+}
+
+cmd_health() {
+  local port; port="$(env_get API_HOST_PORT)"; port="${port:-8000}"
+  local body status
+  if ! body="$(curl -fsS "http://127.0.0.1:${port}/health/ready" 2>/dev/null)"; then
+    bad "api is not answering on 127.0.0.1:${port}"
+    return "$EX_UNHEALTHY"
+  fi
+  case "$body" in
+    *'"status":"ready"'*) ok "api ready" ;;
+    *) bad "api not ready: $body"; return "$EX_UNHEALTHY" ;;
+  esac
+
+  # A stale worker means mail piles up silently, which is worse than a loud
+  # failure -- so it counts against health even though the API is fine.
+  local stale
+  stale="$(psql_q "SELECT count(*) FROM worker_heartbeats WHERE last_seen_at < now() - interval '2 minutes'")" || stale=0
+  local alive
+  alive="$(psql_q "SELECT count(*) FROM worker_heartbeats WHERE last_seen_at >= now() - interval '2 minutes'")" || alive=0
+  if [ "${alive:-0}" -gt 0 ]; then
+    ok "worker alive (${alive})"
+  elif [ "${stale:-0}" -gt 0 ]; then
+    bad "all workers stale -- nothing is being delivered"
+    return "$EX_UNHEALTHY"
+  else
+    warn "no worker has ever reported"
+  fi
+  return "$EX_OK"
+}
+
+cmd_logs() { compose logs "${@:---tail=100}" ; }
+
+# ---------------------------------------------------------------------------
+# config-check -- run the fail-closed checks BEFORE an upgrade, not at startup
+# ---------------------------------------------------------------------------
+
+cmd_config_check() {
+  require_env
+  local problems=0
+
+  [ "$(stat -c %a .env 2>/dev/null || echo 600)" = "600" ] \
+    && ok ".env permissions are 600" \
+    || { warn ".env is not mode 600 -- it holds two secrets"; problems=$((problems+1)); }
+
+  local pw; pw="$(env_get POSTGRES_PASSWORD)"
+  [ -n "$pw" ] && ok "POSTGRES_PASSWORD set" || { bad "POSTGRES_PASSWORD is empty"; problems=$((problems+1)); }
+  case "$pw" in *CHANGEME*) bad "POSTGRES_PASSWORD is still a placeholder"; problems=$((problems+1));; esac
+
+  local key; key="$(env_get EMAILD_MAILBOX_ENCRYPTION_KEY)"
+  if [ -z "$key" ]; then
+    bad "EMAILD_MAILBOX_ENCRYPTION_KEY is empty -- the worker cannot decrypt credentials"
+    problems=$((problems+1))
+  elif [ "${#key}" -ne 44 ]; then
+    bad "EMAILD_MAILBOX_ENCRYPTION_KEY is ${#key} chars, expected 44"
+    problems=$((problems+1))
+  else
+    ok "mailbox encryption key present (fingerprint $(key_fingerprint | cut -c1-19)...)"
+  fi
+
+  local env_name; env_name="$(env_get EMAILD_ENV)"
+  if [ "$env_name" = "production" ]; then
+    local tok proxy enabled
+    tok="$(env_get EMAILD_DASHBOARD_TOKEN)"
+    proxy="$(env_get EMAILD_DASHBOARD_BEHIND_PROXY_AUTH)"
+    enabled="$(env_get EMAILD_DASHBOARD_ENABLED)"
+    if [ "$enabled" != "false" ] && [ -z "$tok" ] && [ "$proxy" != "true" ]; then
+      bad "production dashboard has no auth -- set a token, acknowledge proxy auth, or disable it"
+      problems=$((problems+1))
+    else
+      ok "dashboard auth configured for production"
+    fi
+  fi
+
+  local margin; margin="$(env_get EMAILD_RATE_LIMIT_SAFETY_MARGIN)"
+  if [ -n "$margin" ] && awk "BEGIN{exit !($margin > 0.95)}"; then
+    bad "rate limit safety margin $margin leaves no headroom (over-limit is permanent rejection)"
+    problems=$((problems+1))
+  fi
+
+  info ""
+  if [ "$problems" -eq 0 ]; then
+    info "Configuration looks good."
+    return "$EX_OK"
+  fi
+  err "$problems problem(s) found."
+  return "$EX_FAIL"
+}
+
+# ---------------------------------------------------------------------------
+# backup
+# ---------------------------------------------------------------------------
+
+# SHA-256 of the encryption key. The FINGERPRINT goes in the manifest; the key
+# itself never does. A backup carrying both the ciphertext and the key that
+# decrypts it is a backup whose compromise equals plaintext.
+key_fingerprint() {
+  local key; key="$(env_get EMAILD_MAILBOX_ENCRYPTION_KEY)"
+  [ -n "$key" ] || { printf 'sha256:unset'; return; }
+  printf 'sha256:%s' "$(printf '%s' "$key" | sha256sum | cut -d' ' -f1)"
+}
+
+cmd_backup() {
+  require_env
+  local dest="./backups"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to) dest="$2"; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+
+  postgres_running || die "postgres is not running -- start it first"
+
+  mkdir -p "$dest"
+  local stamp; stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  SCRATCH="$(mktemp -d)"
+  local work="$SCRATCH"
+
+  info "Backing up..."
+
+  # -Fc: a logical, consistent dump. §11 forbids treating the live volume as a
+  # portable backup, and this is why -- the database is written concurrently by
+  # the API, the worker, and the admin CLI.
+  compose exec -T postgres pg_dump -Fc -U "$(pg_user)" -d "$(pg_db)" > "$work/database.dump" \
+    || die "pg_dump failed"
+  ok "database dumped ($(du -h "$work/database.dump" | cut -f1))"
+
+  local schema installation app_version pg_version
+  schema="$(psql_q 'SELECT version_num FROM alembic_version LIMIT 1')"
+  installation="$(psql_q 'SELECT installation_id FROM installation LIMIT 1')"
+  pg_version="$(psql_q 'SHOW server_version')"
+  app_version="$(compose exec -T api python -c 'import emaild;print(emaild.__version__)' 2>/dev/null | tr -d '\r')"
+  app_version="${app_version:-unknown}"
+
+  [ -n "$installation" ] || warn "no installation id found -- restore cannot verify provenance"
+
+  cat > "$work/manifest.json" <<JSON
+{
+  "backupFormatVersion": $BACKUP_FORMAT_VERSION,
+  "applicationVersion": "$app_version",
+  "schemaVersion": "$schema",
+  "installationId": "$installation",
+  "databaseEngine": "postgresql",
+  "databaseVersion": "$pg_version",
+  "createdAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "encryptionKeyFingerprint": "$(key_fingerprint)",
+  "containsEncryptionKey": false
+}
+JSON
+  ok "manifest written"
+
+  ( cd "$work" && sha256sum database.dump manifest.json > checksums.sha256 )
+  ok "checksums written"
+
+  local archive="$dest/emaild-${stamp}.tar.gz"
+  tar -czf "$archive" -C "$work" database.dump manifest.json checksums.sha256
+  chmod 600 "$archive"
+
+  info ""
+  info "Backup complete: $archive  ($(du -h "$archive" | cut -f1))"
+  info ""
+  warn "This archive does NOT contain the mailbox encryption key, by design."
+  info "  Back up EMAILD_MAILBOX_ENCRYPTION_KEY separately and store it apart"
+  info "  from these archives. Restore verifies it against the fingerprint above."
+  info ""
+  info "  Store this file OFF this machine. A backup that has never been"
+  info "  restored is unproven -- test it with: appctl restore $archive"
+}
+
+# ---------------------------------------------------------------------------
+# restore
+# ---------------------------------------------------------------------------
+
+cmd_restore() {
+  require_env
+  local archive="" force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=1; shift ;;
+      -*) die "unknown option: $1" ;;
+      *) archive="$1"; shift ;;
+    esac
+  done
+  [ -n "$archive" ] || { err "usage: appctl restore ARCHIVE [--force]"; exit "$EX_USAGE"; }
+  [ -f "$archive" ] || die "no such archive: $archive"
+
+  SCRATCH="$(mktemp -d)"
+  local work="$SCRATCH"
+  tar -xzf "$archive" -C "$work" || die "archive is not readable"
+
+  # --- 1. validate format ---
+  [ -f "$work/manifest.json" ] || die "no manifest -- this is not an emaild backup"
+  local fmt; fmt="$(sed -n 's/.*"backupFormatVersion": *\([0-9]*\).*/\1/p' "$work/manifest.json")"
+  [ "$fmt" = "$BACKUP_FORMAT_VERSION" ] \
+    || die "backup format $fmt, this appctl understands $BACKUP_FORMAT_VERSION"
+  ok "format version $fmt"
+
+  # --- 2. validate checksums ---
+  ( cd "$work" && sha256sum -c checksums.sha256 >/dev/null 2>&1 ) \
+    || die "checksum mismatch -- the archive is corrupt or was modified"
+  ok "checksums verified"
+
+  # --- 3/4. compatibility ---
+  local m_schema m_install m_fp m_app
+  m_schema="$(sed -n 's/.*"schemaVersion": *"\([^"]*\)".*/\1/p' "$work/manifest.json")"
+  m_install="$(sed -n 's/.*"installationId": *"\([^"]*\)".*/\1/p' "$work/manifest.json")"
+  m_fp="$(sed -n 's/.*"encryptionKeyFingerprint": *"\([^"]*\)".*/\1/p' "$work/manifest.json")"
+  m_app="$(sed -n 's/.*"applicationVersion": *"\([^"]*\)".*/\1/p' "$work/manifest.json")"
+  info "  archive: $m_app · schema $m_schema · installation $m_install"
+
+  # The check that turns a silent disaster into an immediate, clear failure:
+  # restoring data encrypted with a key we do not have.
+  local current_fp; current_fp="$(key_fingerprint)"
+  if [ "$m_fp" != "$current_fp" ]; then
+    err "encryption key mismatch."
+    err "  backup expects : $m_fp"
+    err "  .env provides  : $current_fp"
+    err ""
+    err "Restoring would succeed and leave every mailbox credential undecryptable."
+    err "Supply the matching EMAILD_MAILBOX_ENCRYPTION_KEY and try again."
+    exit "$EX_FAIL"
+  fi
+  ok "encryption key matches the backup"
+
+  # --- 5. refuse to overwrite an active installation ---
+  postgres_running || die "postgres is not running -- start it first"
+  local existing_messages existing_install
+  existing_messages="$(psql_q 'SELECT count(*) FROM messages' || echo 0)"
+  existing_install="$(psql_q 'SELECT installation_id FROM installation LIMIT 1' || echo '')"
+
+  if [ "${existing_messages:-0}" -gt 0 ] && [ "$force" -ne 1 ]; then
+    err "refusing to overwrite an active installation."
+    err "  current installation : ${existing_install:-unknown}"
+    err "  messages that would be destroyed : $existing_messages"
+    err ""
+    err "Restore onto a clean installation, or re-run with --force if you"
+    err "genuinely mean to discard the data above."
+    exit "$EX_FAIL"
+  fi
+  [ "$force" -eq 1 ] && warn "--force given: discarding $existing_messages existing message(s)"
+
+  # --- 6. restore ---
+  info "Restoring database..."
+  compose stop api worker >/dev/null 2>&1 || true
+  compose exec -T postgres psql -U "$(pg_user)" -d postgres -q \
+    -c "DROP DATABASE IF EXISTS $(pg_db) WITH (FORCE);" -c "CREATE DATABASE $(pg_db);" >/dev/null \
+    || die "could not recreate the database"
+  compose exec -T postgres pg_restore -U "$(pg_user)" -d "$(pg_db)" --no-owner --no-acl \
+    < "$work/database.dump" >/dev/null 2>&1 \
+    || warn "pg_restore reported warnings (usually harmless ownership notices)"
+  ok "database restored"
+
+  # --- 10/11. start and health-check ---
+  compose up -d >/dev/null
+  info "Waiting for health..."
+  local i
+  for i in $(seq 1 30); do sleep 2; cmd_health >/dev/null 2>&1 && break; done
+
+  # --- 12. verify and report ---
+  local restored_messages restored_install restored_supp
+  restored_messages="$(psql_q 'SELECT count(*) FROM messages' || echo '?')"
+  restored_supp="$(psql_q 'SELECT count(*) FROM suppressions' || echo '?')"
+  restored_install="$(psql_q 'SELECT installation_id FROM installation LIMIT 1' || echo '?')"
+
+  info ""
+  info "Restore complete."
+  info "  installation : $restored_install"
+  info "  messages     : $restored_messages"
+  info "  suppressions : $restored_supp"
+  if [ -n "$m_install" ] && [ "$restored_install" != "$m_install" ]; then
+    warn "installation id does not match the manifest -- expected $m_install"
+  fi
+  info ""
+  cmd_health
+}
+
+# ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+
+cmd_doctor() {
+  local problems=0
+  info "Environment"
+  command -v docker >/dev/null && ok "docker $(docker --version | awk '{print $3}' | tr -d ,)" \
+    || { bad "docker not found"; problems=$((problems+1)); }
+  docker compose version >/dev/null 2>&1 && ok "compose $(docker compose version --short 2>/dev/null)" \
+    || { bad "docker compose not available"; problems=$((problems+1)); }
+  ok "architecture $(uname -m)"
+
+  local avail; avail="$(df -Pm . | awk 'NR==2{print $4}')"
+  [ "${avail:-0}" -gt 1024 ] && ok "disk ${avail} MB available" \
+    || { warn "only ${avail} MB free -- backups and Postgres need room"; problems=$((problems+1)); }
+
+  info ""
+  info "Configuration"
+  cmd_config_check || problems=$((problems+1))
+
+  info ""
+  info "Services"
+  if postgres_running; then
+    ok "postgres running"
+    local schema; schema="$(psql_q 'SELECT version_num FROM alembic_version LIMIT 1')"
+    [ -n "$schema" ] && ok "schema at $schema" || { bad "no schema applied"; problems=$((problems+1)); }
+    local inst; inst="$(psql_q 'SELECT installation_id FROM installation LIMIT 1')"
+    [ -n "$inst" ] && ok "installation $inst" || { bad "no installation identity"; problems=$((problems+1)); }
+  else
+    warn "postgres not running -- skipping database checks"
+  fi
+
+  info ""
+  info "Health"
+  cmd_health || problems=$((problems+1))
+
+  info ""
+  if [ "$problems" -eq 0 ]; then info "No problems found."; return "$EX_OK"; fi
+  err "$problems problem area(s). See above."
+  return "$EX_FAIL"
+}
+
+usage() {
+  cat <<'USAGE'
+appctl -- operator control for emaild
+
+  start                      start all services
+  stop                       stop (workers finish in-flight sends)
+  restart
+  status                     container status + health overview
+  version                    running version, commit, schema
+  health                     ready check; exit 1 when unhealthy
+  logs [args]                docker compose logs passthrough
+  config-check               validate .env before an upgrade
+  backup [--to DIR]          consistent dump + manifest + checksums
+  restore ARCHIVE [--force]  restore; refuses to overwrite live data
+  doctor                     everything above, as one report
+
+Exit codes: 0 ok · 1 problem · 2 usage
+USAGE
+}
+
+case "${1:-}" in
+  start)        shift; cmd_start "$@" ;;
+  stop)         shift; cmd_stop "$@" ;;
+  restart)      shift; cmd_restart "$@" ;;
+  status)       shift; cmd_status "$@" ;;
+  version)      shift; cmd_version "$@" ;;
+  health)       shift; cmd_health "$@" ;;
+  logs)         shift; cmd_logs "$@" ;;
+  config-check) shift; cmd_config_check "$@" ;;
+  backup)       shift; cmd_backup "$@" ;;
+  restore)      shift; cmd_restore "$@" ;;
+  doctor)       shift; cmd_doctor "$@" ;;
+  -h|--help|help|"") usage; exit "$EX_USAGE" ;;
+  *) err "unknown command: $1"; usage; exit "$EX_USAGE" ;;
+esac

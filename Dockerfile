@@ -32,6 +32,17 @@ RUN groupadd --gid 10001 emaild \
 COPY --from=builder /venv /venv
 ENV PATH="/venv/bin:$PATH"
 
+# §19: no unnecessary packages. This container never installs anything, so the
+# installers are pure attack surface. Removed after the venv is copied so the
+# build stage keeps them.
+RUN /venv/bin/pip uninstall -y pip setuptools wheel 2>/dev/null || true; \
+    rm -rf /venv/lib/python3.12/site-packages/pip* \
+           /venv/lib/python3.12/site-packages/setuptools* \
+           /venv/lib/python3.12/site-packages/wheel* \
+           /venv/lib/python3.12/site-packages/pkg_resources \
+    && find /venv -name "__pycache__" -type d -prune -exec rm -rf {} + \
+    && rm -rf /root/.cache
+
 WORKDIR /app
 COPY --chown=emaild:emaild emaild ./emaild
 COPY --chown=emaild:emaild alembic ./alembic
@@ -40,7 +51,7 @@ COPY --chown=emaild:emaild alembic.ini ./
 USER emaild
 
 # Metadata (§19). Overridden with real values by the release workflow.
-ARG APP_VERSION=0.1.0
+ARG APP_VERSION=0.0.0-dev  # overridden by the release workflow
 ARG GIT_COMMIT=unknown
 ARG BUILD_TIME=unknown
 

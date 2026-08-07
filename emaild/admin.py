@@ -25,6 +25,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from emaild.bootstrap import get_installation
 from emaild.config import Role, Settings, get_settings
 from emaild.crypto import MailboxCipher, generate_api_key
 from emaild.db import dispose_engine, init_engine, session_scope
@@ -451,9 +452,19 @@ async def cmd_status(args: argparse.Namespace, settings: Settings) -> int:
         )
         keys = await active_keys(session)
 
+    async with session_scope() as session:
+        installation = await get_installation(session)
+
     q = o.queue
     verdict = "HEALTHY" if q.healthy else "ATTENTION"
-    print(f"emaild {verdict}   (window: last {o.window_hours}h)\n")
+    print(f"emaild {verdict}   (window: last {o.window_hours}h)")
+    if installation:
+        print(
+            f"  installation {installation.installation_id}"
+            f"  ·  installed {installation.installed_at:%Y-%m-%d}"
+            f" on v{installation.installed_version}"
+        )
+    print()
 
     print("QUEUE")
     print(f"  pending          {q.pending}")

@@ -16,9 +16,10 @@ from fastapi.exceptions import RequestValidationError
 
 from emaild import __version__
 from emaild.api.v1 import router as v1_router
+from emaild.bootstrap import ensure_installation
 from emaild.config import Role, get_settings
 from emaild.dashboard.routes import router as dashboard_router
-from emaild.db import dispose_engine, init_engine
+from emaild.db import dispose_engine, init_engine, session_scope
 from emaild.errors import ApiError, api_error_handler, validation_exception_handler
 from emaild.health import router as health_router
 from emaild.logging_config import configure_logging
@@ -38,7 +39,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         raise RuntimeError(f"emaild.main serves role=api but EMAILD_ROLE={settings.role.value}")
 
     init_engine(settings)
-    log.info("emaild starting", extra={"context": settings.redacted()})
+    async with session_scope() as session:
+        installation_id = await ensure_installation(session)
+    log.info(
+        "emaild starting",
+        extra={"context": {**settings.redacted(), "installation": installation_id}},
+    )
 
     yield
 

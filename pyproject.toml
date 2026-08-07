@@ -1,6 +1,9 @@
 [project]
 name = "emaild"
-version = "0.1.0"
+# Single source of truth (§22). emaild/__init__.py is authoritative; this file,
+# the image label, and /version all derive from it. Three hand-maintained copies
+# agree until the day one of them does not.
+dynamic = ["version"]
 description = "Internal transactional email API. One honest timeline, one dependable foundation."
 requires-python = ">=3.12"
 
@@ -33,6 +36,9 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "emaild/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["emaild"]

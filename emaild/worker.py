@@ -36,6 +36,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from emaild import __version__
+from emaild.bootstrap import ensure_installation
 from emaild.config import Role, Settings, get_settings
 from emaild.crypto import MailboxCipher
 from emaild.db import dispose_engine, init_engine, session_scope
@@ -102,7 +103,9 @@ class Worker:
             self._shutdown.set()
 
     async def run(self) -> None:
-        log.info("worker %s starting", self.worker_id)
+        async with session_scope() as session:
+            installation_id = await ensure_installation(session)
+        log.info("worker %s starting (installation %s)", self.worker_id, installation_id)
         last_maintenance = datetime.min.replace(tzinfo=UTC)
 
         while not self._shutdown.is_set():

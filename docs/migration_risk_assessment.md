@@ -100,9 +100,16 @@ not tested against representative data, it is not supported.** They have only
 ever been run against near-empty databases, so they are a development
 convenience, not a recovery path.
 
-**The honest current position: there is no tested recovery path from a failed
-migration.** That is the single largest gap in this assessment, and it is why
-backup and restore are work orders 7 and 8 rather than later.
+**Resolved 2026-08-07 (WO-5/WO-6).** There is now a tested recovery path. The
+drill ran end to end: back up a populated installation, `docker compose down -v`
+to destroy the volume entirely, bring up a clean installation, restore, and
+verify. Every count matched (messages 10, events 40, suppressions 1, keys 9,
+domains 1), the installation identity travelled with the archive rather than
+being regenerated, and the restored system successfully **sent a real email** —
+proving the mailbox credentials still decrypt under the same key.
+
+Downgrade support remains unclaimed. The recovery path is restore-from-backup,
+not schema downgrade, and that is what release notes should say.
 
 ## 8. Recommendations for the first release
 
