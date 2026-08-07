@@ -35,6 +35,7 @@ from emaild.domains import (
     required_dns_records,
 )
 from emaild.logging_config import configure_logging
+from emaild.metrics import active_keys, build_overview
 from emaild.models import ApiKey, ApiKeyScope, Domain, Mailbox, Project
 from emaild.providers.mxroute import MXRouteClient, MXRouteError
 from emaild.provisioning import (
@@ -433,6 +434,99 @@ async def cmd_suppressions_remove(args: argparse.Namespace, settings: Settings) 
     return EXIT_OK
 
 
+# --- status ----------------------------------------------------------------
+
+
+async def cmd_status(args: argparse.Namespace, settings: Settings) -> int:
+    """The operator's answer to "is email healthy?".
+
+    Exit code is meaningful so this can be used from a cron or a check script:
+    0 healthy, 1 something needs attention.
+    """
+    async with session_scope() as session:
+        o = await build_overview(
+            session,
+            window_hours=args.hours,
+            safety_margin=settings.rate_limit_safety_margin,
+        )
+        keys = await active_keys(session)
+
+    q = o.queue
+    verdict = "HEALTHY" if q.healthy else "ATTENTION"
+    print(f"emaild {verdict}   (window: last {o.window_hours}h)\n")
+
+    print("QUEUE")
+    print(f"  pending          {q.pending}")
+    print(f"  sending          {q.sending}")
+    age = f"{q.oldest_pending_seconds / 60:.1f} min" if q.oldest_pending_seconds else "-"
+    print(f"  oldest pending   {age}")
+    print(f"  needs review     {q.needs_review}")
+    if q.reason:
+        print(f"  ! {q.reason}")
+
+    print("\nVOLUME")
+    print(f"  requested        {o.requested}")
+    print(f"  accepted         {o.accepted}")
+    print(f"  failed           {o.failed}")
+    print(f"  failure rate     {o.failure_rate:.1%}")
+
+    lat = o.latency_ms
+    if lat.get("samples"):
+        print("\nPROVIDER LATENCY")
+        print(
+            f"  p50 {lat['p50']:.0f} ms   p95 {lat['p95']:.0f} ms   max {lat['max']:.0f} ms"
+            f"   (n={lat['samples']})"
+        )
+
+    if o.workers:
+        print("\nWORKERS")
+        for w in o.workers:
+            mark = "alive" if w["alive"] else "STALE"
+            print(
+                f"  [{mark}] {w['worker_id']}  last seen {w['last_seen_seconds_ago']:.0f}s ago"
+                f"  processed={w['messages_processed']}"
+            )
+    else:
+        print("\nWORKERS\n  ! none have ever reported -- is the worker running?")
+
+    if o.rate_headroom:
+        print("\nHOURLY HEADROOM (over-limit is a permanent rejection, not a deferral)")
+        for r in o.rate_headroom:
+            bar = "#" * int(r["utilisation"] * 20)
+            print(
+                f"  {r['sender']:<34} {r['used_this_hour']:>4}/{r['our_ceiling']:<4} "
+                f"{bar:<20} {r['utilisation']:.0%}"
+            )
+
+    if o.by_domain:
+        print("\nBY DOMAIN")
+        print(
+            _table(
+                [
+                    [
+                        d.name,
+                        str(d.requested),
+                        str(d.accepted),
+                        str(d.failed),
+                        f"{d.failure_rate:.1%}",
+                    ]
+                    for d in o.by_domain
+                ],
+                ["DOMAIN", "REQ", "ACCEPTED", "FAILED", "FAIL RATE"],
+            )
+        )
+
+    if o.failures_by_class:
+        print("\nFAILURES BY CLASS")
+        for name, count in o.failures_by_class.items():
+            print(f"  {name:<24} {count}")
+
+    active = [k for k in keys if k["state"] == "active"]
+    print(f"\nKEYS  {len(active)} active of {len(keys)} total")
+
+    return EXIT_OK if q.healthy else EXIT_FAILED
+
+
 # --- wiring ----------------------------------------------------------------
 
 
@@ -497,6 +591,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project", required=True)
     p.add_argument("--mailbox", required=True, action="append", help="repeatable; scopes the key")
     p.set_defaults(fn=cmd_keys_create)
+
+    p = sub.add_parser("status", help="is email healthy? (exit 0 healthy, 1 attention)")
+    p.add_argument("--hours", type=int, default=24)
+    p.set_defaults(fn=cmd_status)
 
     sup = sub.add_parser("suppressions", help="addresses we refuse to send to").add_subparsers(
         dest="cmd", required=True

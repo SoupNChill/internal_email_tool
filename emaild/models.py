@@ -388,6 +388,11 @@ class Message(Base):
 
     # Outcome
     provider_response: Mapped[str | None] = mapped_column(Text)
+    # How long the provider took to answer, in milliseconds. "Are provider
+    # response times changing?" is one of vision.md's questions, and it is also
+    # the earliest warning that something upstream is degrading -- latency
+    # climbs well before failures start.
+    provider_latency_ms: Mapped[int | None] = mapped_column(Integer)
     failure_class: Mapped[FailureClass | None] = mapped_column(
         _pg_enum(FailureClass, "failure_class")
     )
@@ -515,6 +520,32 @@ class IdempotencyKey(Base):
         UniqueConstraint("project_id", "key", name="uq_idempotency_project_key"),
         Index("ix_idempotency_expires", "expires_at"),
     )
+
+
+class WorkerHeartbeat(Base):
+    """Liveness for a process with no listener.
+
+    The worker deliberately exposes no port -- it only makes outbound SMTP
+    connections -- so nothing can probe it over HTTP. It reports into the
+    database instead, which is the one thing both processes already share.
+
+    Note this is a supporting signal, not the primary one. Queue age is the
+    honest health metric: it catches a dead worker, a stuck rate gate, and a
+    provider outage alike, whereas a heartbeat only ever proves the loop is
+    turning.
+    """
+
+    __tablename__ = "worker_heartbeats"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    worker_id: Mapped[str] = mapped_column(String(150), unique=True, nullable=False)
+    version: Mapped[str | None] = mapped_column(String(40))
+    last_seen_at: Mapped[datetime] = _now_col()
+    messages_processed: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default=text("0"), nullable=False
+    )
+
+    __table_args__ = (Index("ix_heartbeat_last_seen", "last_seen_at"),)
 
 
 class SendCounter(Base):

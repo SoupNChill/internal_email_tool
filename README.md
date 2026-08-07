@@ -7,13 +7,44 @@ Sends through MXRoute over SMTP. Applications never see SMTP credentials.
 
 ## Status
 
-**Phase 6 of 9 — suppression.** The complete journey works end to end: a
-request becomes a durable row, a worker claims it, the rate gate clears it, and
-MXRoute accepts it — with an honest timeline at every step. Addresses the
-provider tells us are dead are recorded and refused thereafter.
+**Phase 7 of 9 — observability.** The vision's *first perfect mile* is complete:
+a domain is verified, a scoped key is issued, a message is durably accepted,
+delivered, retried or classified honestly, and both the timeline and the metrics
+reflect what actually happened.
 
-Remaining: observability (7), dashboard (8), production packaging (9). See
-`build_plan.md`.
+Remaining: dashboard (8), production packaging (9). See `build_plan.md`.
+
+Is email healthy?
+
+```bash
+python -m emaild.admin status     # exit 0 healthy, 1 needs attention
+```
+
+```
+emaild HEALTHY   (window: last 24h)
+
+QUEUE
+  pending          0
+  oldest pending   -
+  needs review     0
+
+PROVIDER LATENCY
+  p50 3206 ms   p95 3206 ms   max 3206 ms   (n=1)
+
+WORKERS
+  [alive] 4bab159ce304:1  last seen 2s ago  processed=1
+
+HOURLY HEADROOM (over-limit is a permanent rejection, not a deferral)
+  noreply@example.com                     1/360                       0%
+```
+
+**Queue age is the health signal.** A heartbeat only proves a loop is turning;
+queue age proves work is moving, and catches a dead worker, a stuck rate gate,
+a provider outage, and an exhausted send budget with one number.
+
+Per-project metrics are available to any key at `GET /v1/metrics` — scoped to
+the caller, because how much mail another product sends is not a question an API
+key should be able to answer.
 
 ```bash
 curl -X POST http://localhost:8000/v1/emails \

@@ -29,6 +29,7 @@ from emaild.db import session_scope
 from emaild.errors import ApiError
 from emaild.errors import ValidationError as ApiValidationError
 from emaild.ingest import ingest_message
+from emaild.metrics import build_overview
 from emaild.models import Message, SuppressionSource
 from emaild.suppressions import (
     InvalidAddress,
@@ -197,3 +198,33 @@ async def create_suppression(
             if record.created_at
             else datetime.now(UTC).isoformat(),
         )
+
+
+# --- metrics ---------------------------------------------------------------
+
+
+@router.get("/metrics")
+async def get_metrics(principal: AuthedPrincipal, window_hours: int = 24) -> dict[str, object]:
+    """Health and volume for the calling project.
+
+    Scoped to the caller, like every other read here. An unscoped view would
+    disclose one product's sending volume to another, and "how much mail does
+    that team send?" is not a question an API key should be able to answer about
+    someone else.
+
+    The operator's unscoped view lives in the admin CLI.
+    """
+    settings = get_settings()
+    window = max(1, min(window_hours, 720))  # 1 hour .. 30 days
+    async with session_scope() as session:
+        overview = await build_overview(
+            session,
+            window_hours=window,
+            safety_margin=settings.rate_limit_safety_margin,
+            project_id=principal.project_id,
+        )
+    data = overview.to_dict()
+    # Worker identities are infrastructure detail, not tenant data.
+    data.pop("workers", None)
+    data.pop("by_project", None)
+    return data

@@ -28,11 +28,14 @@ import os
 import random
 import signal
 import socket
+import time
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from emaild import __version__
 from emaild.config import Role, Settings, get_settings
 from emaild.crypto import MailboxCipher
 from emaild.db import dispose_engine, init_engine, session_scope
@@ -42,7 +45,15 @@ from emaild.delivery.classify import Verdict, classify
 from emaild.delivery.smtp import ServerLimits, SmtpAdapter
 from emaild.ingest import purge_expired_bodies
 from emaild.logging_config import configure_logging
-from emaild.models import Domain, Event, Mailbox, Message, MessageStatus, SuppressionSource
+from emaild.models import (
+    Domain,
+    Event,
+    Mailbox,
+    Message,
+    MessageStatus,
+    SuppressionSource,
+    WorkerHeartbeat,
+)
 from emaild.ratelimit import current_budget, next_window_opening
 from emaild.suppressions import InvalidAddress, add_suppression
 
@@ -75,6 +86,7 @@ class Worker:
         self.worker_id = f"{socket.gethostname()}:{os.getpid()}"
         self._shutdown = asyncio.Event()
         self._adapter_override = adapter_override
+        self._processed = 0
         self._adapters: dict[int, DeliveryAdapter] = {}  # mailbox_id -> adapter
         self._cipher = (
             MailboxCipher(settings.mailbox_encryption_key)
@@ -99,6 +111,7 @@ class Worker:
                     await self._maintenance()
                     last_maintenance = datetime.now(UTC)
 
+                await self._heartbeat()
                 processed = await self._process_batch()
                 if processed == 0:
                     # Nothing claimable. Wait, but stay responsive to SIGTERM.
@@ -112,6 +125,35 @@ class Worker:
         for adapter in self._adapters.values():
             await adapter.close()
         log.info("worker %s stopped cleanly", self.worker_id)
+
+    async def _heartbeat(self) -> None:
+        """Report liveness for a process with no listener.
+
+        Failure here must never stop delivery: the heartbeat is a diagnostic,
+        and a worker that refuses to send because it could not write a status
+        row would have inverted its own priorities.
+        """
+        try:
+            async with session_scope() as session:
+                await session.execute(
+                    pg_insert(WorkerHeartbeat)
+                    .values(
+                        worker_id=self.worker_id,
+                        version=__version__,
+                        last_seen_at=datetime.now(UTC),
+                        messages_processed=self._processed,
+                    )
+                    .on_conflict_do_update(
+                        index_elements=[WorkerHeartbeat.worker_id],
+                        set_={
+                            "last_seen_at": datetime.now(UTC),
+                            "messages_processed": self._processed,
+                            "version": __version__,
+                        },
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("worker: heartbeat failed (delivery continues): %s", exc)
 
     async def _maintenance(self) -> None:
         async with session_scope() as session:
@@ -218,13 +260,17 @@ class Worker:
         # The SMTP conversation happens OUTSIDE the transaction. Holding a
         # database transaction open across a network round trip would pin
         # connections for the duration of every send.
+        started = time.monotonic()
         result = await adapter.send(outbound, host=host)
+        latency_ms = int((time.monotonic() - started) * 1000)
 
         async with session_scope() as session:
             message = (
                 await session.execute(select(Message).where(Message.id == message_id))
             ).scalar_one()
+            message.provider_latency_ms = latency_ms
             await self._record_outcome(session, message, result, attempt_no)
+        self._processed += 1
 
     # -- outcome handling ---------------------------------------------------
 
