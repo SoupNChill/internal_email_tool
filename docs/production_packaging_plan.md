@@ -267,10 +267,19 @@ would be tidier.
 
 §25's twenty criteria are met, with the single exception noted below.
 
-**Not yet demonstrated:** pulling the published image from GHCR on this host.
-The release workflow's own smoke test pulled and verified it
-(`published image reports 0.9.0-rc.1`), but the local drill built from the
-release tag instead, because the available token lacks `read:packages`. The
-install path itself is unchanged either way — `install.sh` pulls when the image
-is absent locally — but the registry pull has not been exercised from an
-operator's machine.
+**Registry pull — DEMONSTRATED 2026-08-07.** With no local copy present, pulled
+`ghcr.io/soupnchill/emaild:0.9.0-rc.1` from GHCR:
+
+```
+Digest:  sha256:c3bd7594b094be018231d8f936ec3f978e71e3a065e46b0d7bab2f639936d1cd
+version: 0.9.0-rc.1
+commit:  b40255b8f876e08e5e347ab83d2f030d5ac6204d
+```
+
+The image's `revision` label matches the commit `v0.9.0-rc.1` points at, so the
+running artifact is traceable to its source (§2). Installed from it on a clean
+directory with nothing built on the host: all three emaild containers ran the
+published image, `doctor` reported no problems, a domain was verified to
+`ready`, and a real email was delivered — `OK id=1wsR07-0000000E78y-2cA4`.
+
+**All twenty §25 acceptance criteria are now met.**
