@@ -54,6 +54,11 @@ from emaild.suppressions import (
     remove_suppression,
 )
 
+
+class MXRouteCredentialsMissing(RuntimeError):
+    """Raised by commands that genuinely need the provider."""
+
+
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_FAILED = 1
@@ -62,13 +67,33 @@ EXIT_POLICY = 3
 
 @contextlib.asynccontextmanager
 async def _provider(settings: Settings) -> AsyncIterator[MXRouteClient]:
+    # Checked here rather than at startup: only the commands that actually talk
+    # to the provider need these, so requiring them to run `keys list` would be
+    # friction for nothing (F-16).
+    #
     # Not `assert`: asserts are stripped under `python -O`, which would turn a
-    # missing-credential guard into a confusing TypeError at request time.
-    if not (settings.mxroute_server and settings.mxroute_username and settings.mxroute_api_key):
-        raise RuntimeError("MXRoute credentials missing; role=admin requires all three")
-    async with MXRouteClient(
-        settings.mxroute_server, settings.mxroute_username, settings.mxroute_api_key
-    ) as client:
+    # missing-credential guard into a confusing TypeError mid-request.
+    server = settings.mxroute_server
+    username = settings.mxroute_username
+    api_key = settings.mxroute_api_key
+
+    missing = [
+        name
+        for name, value in (
+            ("EMAILD_MXROUTE_SERVER", server),
+            ("EMAILD_MXROUTE_USERNAME", username),
+            ("EMAILD_MXROUTE_API_KEY", api_key),
+        )
+        if not value
+    ]
+    if missing or not (server and username and api_key):
+        raise MXRouteCredentialsMissing(
+            "This command talks to MXRoute, which needs credentials that are not "
+            f"set: {', '.join(missing)}.\n\n"
+            "Add them to .env and restart. Commands that do not reach the "
+            "provider -- keys, projects, suppressions, status -- work without them."
+        )
+    async with MXRouteClient(server, username, api_key) as client:
         yield client
 
 
@@ -650,6 +675,9 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run(args.fn, args))
     except KeyboardInterrupt:
         return 130
+    except MXRouteCredentialsMissing as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_USAGE
     except MXRouteError as exc:
         print(f"Provider error: {exc}", file=sys.stderr)
         return EXIT_FAILED

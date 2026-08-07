@@ -1,243 +1,175 @@
 # emaild
 
-Internal transactional email API. One secure API, one honest timeline, one
-dependable foundation for every product in the portfolio.
+[![CI](https://github.com/SoupNChill/internal_email_tool/actions/workflows/ci.yml/badge.svg)](https://github.com/SoupNChill/internal_email_tool/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/badge/release-v0.9.0--rc.1-blue)](https://github.com/SoupNChill/internal_email_tool/releases)
+[![Python](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/)
 
-Sends through MXRoute over SMTP. Applications never see SMTP credentials.
+**A self-hosted transactional email API.** One clean endpoint for every product
+you build — and an honest answer about what happened to each message.
 
-## Status
-
-**Phase 8 of 9 — dashboard.** The vision's *first perfect mile* is complete and
-has an operator interface: a domain is verified, a scoped key is issued, a
-message is durably accepted, delivered, retried or classified honestly, and both
-the timeline and the metrics reflect what actually happened.
-
-Remaining: production packaging (9). See `build_plan.md`.
-
-**Integrating a product?** `docs/integration.md` is the whole thing — paste it to
-a coding assistant, or read it in two minutes.
-
-The dashboard is at `/` — read-only by design. Every mutation lives in the admin
-CLI, where it gets a confirmation prompt and a log line.
-
-| Page | Answers |
-|---|---|
-| `/` | Is email healthy? Volume, latency, headroom, workers. |
-| `/domains` | Which domains can send, and exactly which DNS records are missing. |
-| `/messages` | Search by recipient, subject, or id; open one for its timeline. |
-| `/keys` | What exists, what it may send as, when it was last used. |
-| `/suppressions` | Who we refuse to mail, and why. |
-
-Serving it unauthenticated in production is refused at startup. Either set
-`EMAILD_DASHBOARD_TOKEN`, or set `EMAILD_DASHBOARD_BEHIND_PROXY_AUTH=true` to
-confirm Cloudflare Access is handling it. Never put Access in front of `/v1/*` —
-a machine client cannot complete an SSO challenge.
-
-Is email healthy?
+Applications send one authenticated request. emaild takes responsibility from
+there: durable acceptance, asynchronous delivery, controlled retries, honest
+failure classification, and a timeline you can actually read.
 
 ```bash
-python -m emaild.admin status     # exit 0 healthy, 1 needs attention
-```
-
-```
-emaild HEALTHY   (window: last 24h)
-
-QUEUE
-  pending          0
-  oldest pending   -
-  needs review     0
-
-PROVIDER LATENCY
-  p50 3206 ms   p95 3206 ms   max 3206 ms   (n=1)
-
-WORKERS
-  [alive] 4bab159ce304:1  last seen 2s ago  processed=1
-
-HOURLY HEADROOM (over-limit is a permanent rejection, not a deferral)
-  noreply@example.com                     1/360                       0%
-```
-
-**Queue age is the health signal.** A heartbeat only proves a loop is turning;
-queue age proves work is moving, and catches a dead worker, a stuck rate gate,
-a provider outage, and an exhausted send budget with one number.
-
-Per-project metrics are available to any key at `GET /v1/metrics` — scoped to
-the caller, because how much mail another product sends is not a question an API
-key should be able to answer.
-
-```bash
-curl -X POST http://localhost:8000/v1/emails \
+curl -X POST https://mail.example.com/v1/emails \
   -H "Authorization: Bearer em_live_..." \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: order-42" \
   -d '{
     "from": "Acme <noreply@example.com>",
     "to": "customer@example.net",
     "subject": "Verify your email",
-    "html": "<p>...</p>",
-    "text": "..."
+    "html": "<p>Click to verify.</p>",
+    "text": "Click to verify."
   }'
 
-{"id":"email_01KZDBG61EAKBX5G64TM8V8T3Y","status":"queued"}
+{"id":"email_01KZDD5PWYYJNQPPWHN9YYYB96","status":"queued"}
 ```
 
-`queued` means the row is committed and a worker will pick it up. It does not
-mean sent, and it certainly does not mean delivered.
+Wire-compatible with [Resend](https://resend.com), so any coding assistant
+already knows how to call it. Point [docs/integration.md](docs/integration.md) at
+one and it will get the integration right without further explanation.
 
-Then read the honest timeline:
+---
 
-```
-api.accepted        recipients=1 size_bytes=2283
-message.queued      message_id_header=<email_01KZ...@example.com>
-delivery.attempt    attempt=1 host=chocobo.mxrouting.net
-provider.accepted   code=250 response="OK id=1wsDhE-00000008tKT-28PB"
-```
+## Why this exists
 
-`accepted_by_provider` is terminal and means MXRoute took custody. It does
-**not** mean delivered — bad external recipients are accepted at RCPT and bounce
-out of band, so that is the honest limit of what we can prove.
+Every new product hits the same wall: SMTP credentials, DNS records, retry
+logic, and no idea whether a message actually left the building. None of it is
+the product.
 
-Working today, via the admin CLI:
+emaild makes those decisions once. Applications never see SMTP credentials, and
+a new product inherits a working email foundation instead of rediscovering one.
 
-```bash
-python -m emaild.admin domains token          # ownership TXT record
-python -m emaild.admin domains add example.com
-python -m emaild.admin domains records example.com   # exact DNS to publish
-python -m emaild.admin domains verify                # re-check and update state
-python -m emaild.admin mailboxes provision noreply@example.com
-python -m emaild.admin projects create billing
-python -m emaild.admin keys create billing-prod --project billing \
-    --mailbox noreply@example.com
-python -m emaild.admin keys revoke billing-prod    # immediate; auth is not cached
-```
+### What it will not tell you
 
-The CLI is `role=admin` — the only surface holding the MXRoute account-root
-credential, and never routed through the tunnel.
+Most email APIs report `delivered`. emaild does not, because on this provider it
+cannot be proven:
 
-## Documents
-
-**Operators**
-
-| File | What it is |
+| Status | What it actually means |
 |---|---|
-| [docs/installation.md](docs/installation.md) | Installing on a clean host |
-| [docs/operations.md](docs/operations.md) | Day-to-day running |
-| [docs/backup-and-restore.md](docs/backup-and-restore.md) | **Read this one** |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom → cause → fix |
-| [docs/configuration.md](docs/configuration.md) | Every variable |
-| [docs/architecture-overview.md](docs/architecture-overview.md) | How it fits together |
+| `queued` | Durably stored. **Not sent.** |
+| `sending` | A worker is delivering it now. |
+| `accepted_by_provider` | The provider took custody and answered `250`. **Terminal — not "delivered".** |
+| `temporarily_failed` | Retryable failure; will retry with backoff. |
+| `permanently_rejected` | Will not be retried. |
 
-**Integrators**
+Bad external recipients are accepted at RCPT and bounce out of band, so
+`accepted_by_provider` is the honest limit of what can be demonstrated.
 
-| File | What it is |
-|---|---|
-| [docs/integration.md](docs/integration.md) | The whole API. Paste it to a coding assistant. |
+---
 
-**Background**
+## Features
 
-| File | What it is |
-|---|---|
-| `vision.md` | What we're building and why |
-| `spec_sheet.md` | What MXRoute actually does — verified, inferred, and unknown |
-| `spike_results.md` | Observed SMTP behaviour, and the failure taxonomy it seeds |
-| `build_plan.md` | The nine phases |
-| `deployment_and_release.md` | Where it runs, and which release rules bind |
-| `docs/distribution_audit.md` | Production-readiness audit and findings |
-| `release_rules/` | The standing release contract |
+- **Resend-compatible API** — `POST /v1/emails`, bearer auth, `Idempotency-Key`
+- **Durable acceptance** — the response is sent only after the row commits
+- **Postgres as the queue** — `FOR UPDATE SKIP LOCKED` plus a reaper for crashed
+  workers; no broker to operate
+- **Scoped API keys** — per project and per sender identity, revoked instantly
+  because authentication is never cached
+- **Domain lifecycle** — DNS verified continuously; only `ready` domains send
+- **Honest failure classification** — built from responses captured on a live
+  server, not guessed
+- **Suppression list** — fed automatically by provider rejections
+- **Read-only dashboard** — every mutation lives in the CLI, where it is logged
+- **Backup and restore** — proven by destroying an installation and rebuilding it
+
+---
 
 ## Quick start
 
-```bash
-cp .env.example .env
+**Sending from an application?** → **[docs/integration.md](docs/integration.md)**
+is the whole API in two minutes.
 
-# Generate the mailbox encryption key. Back this up before creating any mailbox
-# (release_rules §44) -- losing it means re-provisioning every mailbox password.
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-
-# Set POSTGRES_PASSWORD and EMAILD_MAILBOX_ENCRYPTION_KEY in .env, then:
-docker compose up --build
-
-curl -s localhost:8000/health/ready
-curl -s localhost:8000/version
-```
-
-Public exposure, once a product outside this machine needs to reach it:
+**Running the service?** → **[docs/installation.md](docs/installation.md)**.
 
 ```bash
-docker compose --profile public up -d    # requires CLOUDFLARE_TUNNEL_TOKEN
+# On the target host, with Docker installed:
+./install.sh --version 0.9.0-rc.1 --lan --port 8000
+cd /opt/emaild && ./appctl doctor
 ```
+
+**Working on emaild itself?** See [Development](#development).
+
+---
+
+## Documentation
+
+### Operators
+
+| | |
+|---|---|
+| [installation.md](docs/installation.md) | Install, upgrade, uninstall |
+| [operations.md](docs/operations.md) | Day-to-day running |
+| [backup-and-restore.md](docs/backup-and-restore.md) | **Read this one first** |
+| [troubleshooting.md](docs/troubleshooting.md) | Symptom → cause → fix |
+| [configuration.md](docs/configuration.md) | Every variable |
+| [architecture-overview.md](docs/architecture-overview.md) | How it fits together |
+
+### Integrators
+
+| | |
+|---|---|
+| [integration.md](docs/integration.md) | The whole API. Paste it to a coding assistant. |
+
+### Design record
+
+| | |
+|---|---|
+| [vision.md](vision.md) | What this is for, and what it refuses to become |
+| [spec_sheet.md](spec_sheet.md) | What MXRoute actually does — verified, inferred, unknown |
+| [spike_results.md](spike_results.md) | Observed SMTP behaviour, and the taxonomy it seeded |
+| [build_plan.md](build_plan.md) | The nine phases |
+| [docs/distribution_audit.md](docs/distribution_audit.md) | Production-readiness audit |
+
+---
 
 ## Architecture
 
 ```
-  ┌──────────┐      ┌──────────┐
-  │   api    │      │  worker  │        api    : public. No SMTP, no MXRoute key.
-  │ (public) │      │(no port) │        worker : outbound SMTP only. No listener.
-  └────┬─────┘      └────┬─────┘        admin  : provisioning. Never routed public.
-       └───────┬─────────┘
-               ▼
-        ┌────────────┐         ┌──────────────────┐
-        │  postgres  │         │  MXRoute         │
-        │ state +    │         │  SMTP :465       │
-        │ queue      │         │  REST (admin)    │
-        └────────────┘         └──────────────────┘
+   your product                        ┌──────────────────┐
+        │  POST /v1/emails             │    MXRoute       │
+        ▼                              │  REST  (admin)   │
+   ┌─────────┐                         │  SMTP  :465      │
+   │   api   │  no SMTP, no admin key  └───▲──────────▲───┘
+   └────┬────┘                            │          │
+        │ writes                          │          │
+        ▼                                 │          │
+   ┌──────────┐      claims        ┌──────┴───┐      │
+   │ postgres │◄──────────────────►│  worker  │──────┘
+   │ state +  │                    │ no port  │  outbound only
+   │ queue    │                    └──────────┘
+   └──────────┘
 ```
 
-Postgres is the queue — `FOR UPDATE SKIP LOCKED` plus a reaper for stale claims.
-At this volume a broker would be a moving part with nothing to do.
+**Three roles, three sets of secrets**, enforced at startup — a process given a
+secret it must not hold refuses to start:
 
-### Secret separation
+| Role | Mailbox key | MXRoute admin key | Listens |
+|---|---|---|---|
+| `api` | forbidden | forbidden | yes |
+| `worker` | required | forbidden | no |
+| `admin` | required | per command | no |
 
-The three roles hold different secrets, enforced at startup rather than by
-convention:
+Compromising the internet-facing surface therefore yields sending within
+existing key scopes — not the ability to delete mailboxes.
 
-| Role | Mailbox key | MXRoute admin key |
-|---|---|---|
-| `api` | forbidden | forbidden |
-| `worker` | required | forbidden |
-| `admin` | required | required |
+---
 
-A compromise of the internet-facing surface therefore yields sending within
-existing key scopes — not the ability to delete mailboxes or touch reseller
-users. Starting a role with a secret it must not have is a hard failure.
+## Provider constraints worth knowing
 
-## Suppression
+Verified against a live account, not assumed:
 
-The only brake that exists. Bad external recipients come back `250 Accepted` and
-bounce out of band, so nothing else stops us mailing a dead address forever.
+- **400 sends/hour per sender identity**, and over-limit is a **permanent
+  rejection with no provider-side queue.** The rate limiter is a hard gate: it
+  holds messages back rather than letting them fail.
+- **The envelope sender must equal the SMTP login exactly** — plus-addressing
+  included. A mailbox *is* a sender identity, one-to-one, which is why bounce
+  attribution uses an authored `Message-ID` rather than VERP.
+- **Message bodies are purged** 72 hours after a terminal state. Verification
+  links and reset tokens must not become a permanent archive.
 
-Permissions are deliberately asymmetric:
-
-| Direction | Who | Why |
-|---|---|---|
-| **Add** — `POST /v1/suppressions` or CLI | any API key | Fails closed: worst case we stop mailing someone we could have. |
-| **Remove** — CLI only, and `--yes` required | operator | Fails open: resumes mail to an address we had reason to distrust. |
-
-Addresses are also suppressed automatically when the provider rejects a
-recipient as nonexistent — the one bounce signal available synchronously. The
-bar is deliberately high: policy rejections, reputation blocks, and our own
-misconfigurations never suppress a recipient, because a wrong entry silently
-stops legitimate mail and nobody notices until they complain.
-
-```bash
-python -m emaild.admin suppressions list
-python -m emaild.admin suppressions add dead@example.net --reason "hard bounce"
-python -m emaild.admin suppressions remove dead@example.net --yes
-```
-
-## Provider constraints that shape the design
-
-Verified against a live account; details in `spec_sheet.md`.
-
-- **400 sends/hour per sender identity**, and over-limit is a **permanent 5xx**
-  with no provider-side queue. The rate limiter is a hard gate, not a throttle.
-- **The envelope sender must equal the SMTP login exactly.** A mailbox *is* a
-  sender identity, one-to-one.
-- **Bad external recipients return `250 Accepted`** and bounce out of band, so
-  `accepted_by_provider` is terminal and does **not** mean delivered. The status
-  vocabulary says only what we can actually prove.
-- Server advertises `SIZE`, `MAILMAX`, and `RCPTMAX` in EHLO — read at connect
-  time rather than hardcoded.
+---
 
 ## Development
 
@@ -245,13 +177,47 @@ Verified against a live account; details in `spec_sheet.md`.
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
+cp .env.example .env    # set POSTGRES_PASSWORD and EMAILD_MAILBOX_ENCRYPTION_KEY
+docker compose up -d
+
 ruff check . && ruff format --check .
 mypy emaild
-pytest
-
-alembic upgrade head          # requires EMAILD_DATABASE_URL
-alembic revision --autogenerate -m "description"
+EMAILD_TEST_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5443/emaild pytest -q
+./scripts/secret-scan.sh
 ```
 
-Released migrations are immutable (`release_rules` §7). Correct a mistake with a
-new migration, never by editing one that has shipped.
+CI runs all of the above, plus a production image build that must start and
+become healthy.
+
+### Conventions
+
+- **Released migrations are immutable.** Correct a mistake with a new migration,
+  never by editing one that shipped. Formatters are excluded from
+  `alembic/versions/` so they cannot rewrite one by accident.
+- **`emaild/__init__.py` is the only source of the version.**
+- **Run `./scripts/secret-scan.sh` before committing.** It checks for provider
+  credentials, API keys, encryption keys, and any live value from your `.env`.
+
+### Releasing
+
+```bash
+# 1. bump __version__ in emaild/__init__.py
+# 2. commit
+git tag -a v1.2.3 -m "..." && git push origin v1.2.3
+```
+
+The release workflow verifies the tag matches the source, runs the full suite,
+builds the image **once**, publishes it to GHCR, and records the digest. It is
+the only workflow holding `packages: write`.
+
+---
+
+## Project status
+
+**v0.9.0-rc.1** — feature complete and packaged. The full lifecycle (install →
+data → restart → container replacement → backup → destroy → restore → verify →
+send) has been demonstrated end to end on a clean installation.
+
+Deliberately out of scope: marketing campaigns, contact lists, drip sequences,
+scheduled sends, a visual editor, and any promise about inbox placement that
+cannot be proven.

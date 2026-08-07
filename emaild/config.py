@@ -160,18 +160,17 @@ class Settings(BaseSettings):
                 "publicly routed. See deployment_and_release.md §3."
             )
 
-        if self.role is Role.ADMIN:
-            missing = [
-                name
-                for name, val in (
-                    ("EMAILD_MXROUTE_SERVER", self.mxroute_server),
-                    ("EMAILD_MXROUTE_USERNAME", self.mxroute_username),
-                    ("EMAILD_MXROUTE_API_KEY", self.mxroute_api_key),
-                )
-                if not val
-            ]
-            if missing:
-                raise ValueError(f"role=admin requires: {', '.join(missing)}")
+        # NOTE: role=admin does NOT require the MXRoute credentials here.
+        #
+        # It used to, and that was too strict: most admin commands -- keys,
+        # projects, suppressions, status -- never touch MXRoute at all. The
+        # requirement sat on the ROLE rather than on the COMMAND, so on a freshly
+        # restored host you could not manage API keys until you had also
+        # repopulated credentials those commands never use. Found during the
+        # Phase 9 release drill (F-16).
+        #
+        # The check now lives at the point of use, in emaild/admin.py, where it
+        # can say which command needed them.
 
         if self.role in (Role.WORKER, Role.ADMIN) and not self.mailbox_encryption_key:
             raise ValueError(

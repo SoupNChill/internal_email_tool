@@ -134,3 +134,59 @@ async def test_single_row_constraint_is_enforced_by_the_database(maker):
         session.add(Installation(id=2, installation_id="inst_second", installed_version="x"))
         with pytest.raises(Exception):  # noqa: B017 - driver-specific IntegrityError
             await session.commit()
+
+
+# --- F-16: MXRoute credentials are required by COMMAND, not by ROLE ----------
+
+
+def _admin_settings(**kw):
+    from emaild.config import Settings
+
+    base = {
+        "_env_file": None,
+        "role": "admin",
+        "database_url": TEST_DSN or "postgresql+asyncpg://x/y",
+        "mailbox_encryption_key": "Bb1kMh0e_pJKtxJm5RXFF8pmvWZ_XYbFxK1hHYnQGTk=",
+    }
+    base.update(kw)
+    return Settings(**base)
+
+
+def test_admin_role_no_longer_demands_mxroute_credentials_up_front():
+    """Found by the Phase 9 drill: on a freshly restored host you could not manage
+    API keys until you had repopulated credentials that key management never
+    uses. The requirement belongs on the command, not the role."""
+    settings = _admin_settings()
+    assert settings.role.value == "admin"
+    assert settings.mxroute_api_key is None
+
+
+def test_admin_role_still_requires_the_encryption_key():
+    """This one IS role-wide: admin handles mailbox credentials."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        _admin_settings(mailbox_encryption_key=None)
+
+
+async def test_commands_that_need_the_provider_fail_with_guidance():
+    from emaild.admin import MXRouteCredentialsMissing, _provider
+
+    with pytest.raises(MXRouteCredentialsMissing) as exc:
+        async with _provider(_admin_settings()):
+            pass
+
+    message = str(exc.value)
+    # Names what is missing, and what still works without it.
+    assert "EMAILD_MXROUTE_SERVER" in message
+    assert "keys, projects, suppressions, status" in message
+
+
+async def test_provider_opens_when_credentials_are_present():
+    from emaild.admin import _provider
+
+    settings = _admin_settings(
+        mxroute_server="host.example", mxroute_username="u", mxroute_api_key="Mxdeadbeef"
+    )
+    async with _provider(settings) as client:
+        assert client is not None

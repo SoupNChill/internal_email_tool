@@ -244,13 +244,19 @@ was replaced by the archive's rather than kept.
 
 ### Findings
 
-**F-16 (minor, open).** `admin` commands that do not touch MXRoute — `keys`,
+**F-16 — RESOLVED 2026-08-07.** `admin` commands that do not touch MXRoute — `keys`,
 `projects`, `suppressions`, `status` — still require the MXRoute credentials,
 because the requirement sits on the role rather than the command. During the
 drill this blocked key management on a freshly restored host until `.env` was
 fully repopulated. The documented procedure covers it (restore `.env` alongside
-the archive), so it is friction rather than a defect, but the requirement is
-stricter than it needs to be.
+the archive), so it was friction rather than a defect, but the requirement was
+stricter than it needed to be.
+
+Fixed by moving the check from the role to the command. `role=admin` no longer
+demands MXRoute credentials at startup; the commands that actually reach the
+provider check at the point of use and say which are missing and what still
+works without them. Verified live: `keys list` exits 0 without credentials,
+`domains token` exits 2 with actionable guidance.
 
 **F-17 (cosmetic, open).** Worker heartbeats survive a restore, so a restored
 installation briefly reports workers that no longer exist. They age out to
