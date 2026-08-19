@@ -38,7 +38,12 @@ from emaild.domains import (
 from emaild.logging_config import configure_logging
 from emaild.metrics import active_keys, build_overview
 from emaild.models import ApiKey, ApiKeyScope, Domain, Mailbox, Project
-from emaild.providers.mxroute import MXRouteClient, MXRouteError
+from emaild.providers.mxroute import (
+    MXRouteAuthError,
+    MXRouteClient,
+    MXRouteConflict,
+    MXRouteError,
+)
 from emaild.provisioning import (
     PolicyViolation,
     ProvisioningError,
@@ -144,17 +149,47 @@ async def cmd_domains_token(args: argparse.Namespace, settings: Settings) -> int
     return EXIT_OK
 
 
+def domain_add_advice(exc: MXRouteError, domain: str) -> str:
+    """What to actually do about a failed `domains add`.
+
+    Separated from the command so the mapping can be tested without a provider
+    or a database, and because it is the part that was wrong: every provider
+    error used to produce the ownership-TXT hint, so a 401 -- credentials
+    rejected, nothing to do with DNS -- sent the operator off to publish a
+    record that was never the problem. Advice that confidently names the wrong
+    cause is worse than no advice, because it is followed.
+    """
+    if isinstance(exc, MXRouteAuthError):
+        return (
+            "The credentials were rejected, so this is not a DNS problem.\n"
+            "Check EMAILD_MXROUTE_* in the .env beside compose.yaml:\n"
+            "  EMAILD_MXROUTE_USERNAME is the account username -- not your\n"
+            "    email address, and not the domain.\n"
+            "  EMAILD_MXROUTE_SERVER is the mail server hostname, for example\n"
+            "    chocobo.mxrouting.net -- not api.mxroute.com.\n"
+            "\nTest them directly (200 means good, 401 means still wrong):\n"
+            "  curl -s -o /dev/null -w '%{http_code}\\n' \\\n"
+            '    -H "X-Server: <server>" -H "X-Username: <username>" \\\n'
+            '    -H "X-API-Key: <key>" https://api.mxroute.com/domains'
+        )
+    if isinstance(exc, MXRouteConflict):
+        return (
+            f"{domain} already exists on the MXRoute account. Adding it here "
+            "only starts tracking it locally; it is not created again."
+        )
+    return (
+        "If the domain is new to this account, the ownership TXT record may "
+        "not be resolving yet. Run 'domains token' and publish it first."
+    )
+
+
 async def cmd_domains_add(args: argparse.Namespace, settings: Settings) -> int:
     async with _provider(settings) as client, session_scope() as session:
         try:
             domain = await add_domain(session, client, args.domain)
         except MXRouteError as exc:
             print(f"Failed to add {args.domain}: {exc}", file=sys.stderr)
-            print(
-                "\nMost often this means the ownership TXT record is not yet "
-                "resolving. Run 'domains token' and publish it first.",
-                file=sys.stderr,
-            )
+            print(f"\n{domain_add_advice(exc, args.domain)}", file=sys.stderr)
             return EXIT_FAILED
         print(f"Tracking {domain.name} (status: {domain.status.value})")
     print(f"\nNext: python -m emaild.admin domains records {args.domain}")
