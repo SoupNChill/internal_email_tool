@@ -179,13 +179,13 @@ jobs:
       - uses: actions/checkout@v7
       - name: Syntax
         run: |
-          bash -n appctl
+          bash -n deploy/appctl
           bash -n deploy/install.sh
           bash -n scripts/secret-scan.sh
       - name: ShellCheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck -S warning appctl deploy/install.sh scripts/secret-scan.sh
+          shellcheck -S warning deploy/appctl deploy/install.sh scripts/secret-scan.sh
 
   compose:
     name: Production compose is deployable

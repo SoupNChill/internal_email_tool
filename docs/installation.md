@@ -21,13 +21,72 @@ timeout 5 bash -c 'cat < /dev/null > /dev/tcp/chocobo.mxrouting.net/465' \
   && echo "465 reachable" || echo "465 BLOCKED — emaild cannot deliver from here"
 ```
 
-## Install
+## Getting the files onto the host
 
-Copy `deploy/` to the target host, then:
+The host needs the whole of `deploy/` — **three files**, and the installer
+refuses to start without all of them:
+
+| File | Why it is needed |
+|---|---|
+| `install.sh` | The installer itself |
+| `compose.yaml` | Defines the services; copied into the installation |
+| `appctl` | Every operator command from here on — `doctor`, `backup`, `admin` |
+
+Copy the **directory**, not the files you happen to click on. From a machine
+with a checkout:
 
 ```bash
-./install.sh --version 0.9.0-rc.1 --lan --port 8000
+tar czf emaild-deploy.tar.gz deploy/
+scp emaild-deploy.tar.gz you@host:~
 ```
+
+Then on the host:
+
+```bash
+tar xzf emaild-deploy.tar.gz && cd deploy
+```
+
+The repository is private, so `git clone` on the target host would need an SSH
+key deployed there. Copying the tarball avoids putting repository credentials
+on a mail server that does not need them.
+
+## Install
+
+```bash
+sudo bash install.sh --version 0.9.0-rc.1 --lan --port 8000
+```
+
+### Why `bash install.sh` and not `./install.sh`
+
+Because it works in every case. Graphical FTP clients — FileZilla, WinSCP,
+Cyberduck — do **not** preserve the Unix executable bit, so a transferred
+`install.sh` arrives unexecutable and `./install.sh` fails with:
+
+```
+-bash: ./install.sh: Permission denied
+```
+
+Reaching for `sudo` then produces a genuinely misleading error:
+
+```
+sudo: ./install.sh: command not found
+```
+
+The file is right there. `sudo` reports "command not found" for a file it
+cannot execute, which sends you looking for a missing program instead of a
+missing permission bit. Invoking `bash` explicitly sidesteps the bit entirely.
+(`chmod +x install.sh` also works, if you prefer.)
+
+### Why `sudo`
+
+The default `--dir` is `/opt/emaild`, which needs root to create, and talking
+to the Docker daemon needs root unless your user is in the `docker` group.
+Running the installer under `sudo` covers both.
+
+One consequence: the installation directory is then owned by root, so operator
+commands are `sudo ./appctl …` rather than `./appctl …`. The rest of this
+documentation writes `./appctl` for brevity — add `sudo` if you installed this
+way.
 
 | Flag | Meaning |
 |---|---|

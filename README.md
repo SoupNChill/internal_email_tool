@@ -84,10 +84,14 @@ is the whole API in two minutes.
 **Running the service?** → **[docs/installation.md](docs/installation.md)**.
 
 ```bash
-# On the target host, with Docker installed:
-./install.sh --version 0.9.0-rc.1 --lan --port 8000
-cd /opt/emaild && ./appctl doctor
+# Copy the whole deploy/ directory to the target host, then, on that host:
+sudo bash install.sh --version 0.9.0-rc.1 --lan --port 8000
+cd /opt/emaild && sudo ./appctl doctor
 ```
+
+`bash install.sh` rather than `./install.sh` because FTP clients drop the
+executable bit; see [installation.md](docs/installation.md) for the full
+transfer recipe.
 
 **Working on emaild itself?** See [Development](#development).
 

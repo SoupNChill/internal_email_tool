@@ -43,9 +43,42 @@ done
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------------------------------------------------------------------------
+# 0. The installer's own files.
+#
+# install.sh is useless without compose.yaml (what to run) and appctl (how to
+# operate it afterwards). Copying only some of deploy/ is the most likely way
+# an install goes wrong -- an FTP client that transfers the file you clicked on
+# is enough to do it -- and appctl used to be skipped SILENTLY, so the failure
+# only surfaced at the end when the closing instructions said to run a file
+# that was not there. Check before anything is created.
+# ---------------------------------------------------------------------------
+
+info "Checking the installer files..."
+
+missing=""
+for f in compose.yaml appctl; do
+  [ -f "$SOURCE_DIR/$f" ] || missing="$missing $f"
+done
+
+if [ -n "$missing" ]; then
+  err "these files are missing from $SOURCE_DIR:$missing"
+  err ""
+  err "install.sh needs every file in deploy/ -- compose.yaml describes the"
+  err "services and appctl is how you operate them once they are running."
+  err ""
+  err "Copy the whole directory, not individual files. From a checkout:"
+  err "    tar czf emaild-deploy.tar.gz deploy/"
+  err "then on this host:"
+  err "    tar xzf emaild-deploy.tar.gz && cd deploy"
+  exit 1
+fi
+ok "compose.yaml and appctl present"
+
+# ---------------------------------------------------------------------------
 # 1-5. Preflight (§19 steps 1-5). Everything checked BEFORE anything is created.
 # ---------------------------------------------------------------------------
 
+info ""
 info "Checking the host..."
 
 [ "$(uname -s)" = "Linux" ] || die "this installer supports Linux only (found $(uname -s))"
@@ -211,11 +244,12 @@ ok "mailbox encryption key generated"
 [ "$LAN" -eq 1 ] && ok "dashboard password generated"
 
 cp "$SOURCE_DIR/compose.yaml" "$TARGET/compose.yaml"
-if [ -f "$SOURCE_DIR/../appctl" ]; then
-  cp "$SOURCE_DIR/../appctl" "$TARGET/appctl"
-  chmod +x "$TARGET/appctl"
-  ok "appctl installed"
-fi
+cp "$SOURCE_DIR/appctl" "$TARGET/appctl"
+# Set explicitly rather than inherited: a file that arrived over FTP or in a
+# zip has usually lost its executable bit, and presence was already checked
+# above.
+chmod +x "$TARGET/appctl"
+ok "appctl installed"
 
 # ---------------------------------------------------------------------------
 # 10-13. Pull, initialise, start
@@ -303,9 +337,9 @@ BEFORE YOU SEND ANYTHING
 
   1. Fill in the MXROUTE_* values in .env, then add a domain:
          ./appctl stop && nano .env && ./appctl start
-         docker compose exec api python -m emaild.admin domains token
+         ./appctl admin domains token
   2. Publish the DNS records it prints, then verify:
-         docker compose exec api python -m emaild.admin domains verify
+         ./appctl admin domains verify
 
 BACK THIS UP TODAY, NOT LATER
 
