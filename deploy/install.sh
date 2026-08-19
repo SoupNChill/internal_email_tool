@@ -121,7 +121,14 @@ if port_in_use "$PORT"; then
   err "port ${PORT} is already in use on this host."
   err ""
   err "Something else is listening there. Pick another with --port, e.g.:"
-  err "    ./install.sh --version ${VERSION:-X.Y.Z} --port 8080${LAN:+ --lan}"
+  # NOT ${LAN:+ --lan}: LAN is "0" when the flag was not given, and "0" is a
+  # non-empty string, so that form always appended --lan. The suggested retry
+  # would have told an operator who deliberately kept the default of localhost
+  # to re-run binding 0.0.0.0 -- exposing the API to the whole network on a
+  # copy-paste, in an error message they were already inclined to trust.
+  lan_hint=""
+  [ "$LAN" -eq 1 ] && lan_hint=" --lan"
+  err "    bash install.sh --version ${VERSION:-X.Y.Z} --port 8080${lan_hint}"
   exit 1
 fi
 ok "port ${PORT} available"
@@ -243,8 +250,16 @@ ok "database password generated"
 ok "mailbox encryption key generated"
 [ "$LAN" -eq 1 ] && ok "dashboard password generated"
 
-cp "$SOURCE_DIR/compose.yaml" "$TARGET/compose.yaml"
-cp "$SOURCE_DIR/appctl" "$TARGET/appctl"
+# Staging the files in the install directory itself is a natural thing to do --
+# you upload them to /opt/emaild and run the installer where they landed. `cp a
+# a` fails ("are the same file"), and under `set -e` that killed the install
+# after the secrets were already written. Detect it instead.
+if [ "$SOURCE_DIR" = "$TARGET" ]; then
+  ok "compose.yaml already in place (installing from the target directory)"
+else
+  cp "$SOURCE_DIR/compose.yaml" "$TARGET/compose.yaml"
+  cp "$SOURCE_DIR/appctl" "$TARGET/appctl"
+fi
 # Set explicitly rather than inherited: a file that arrived over FTP or in a
 # zip has usually lost its executable bit, and presence was already checked
 # above.
