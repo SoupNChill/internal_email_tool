@@ -1,7 +1,7 @@
 # emaild
 
 [![CI](https://github.com/SoupNChill/internal_email_tool/actions/workflows/ci.yml/badge.svg)](https://github.com/SoupNChill/internal_email_tool/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.9.0--rc.1-blue)](https://github.com/SoupNChill/internal_email_tool/releases)
+[![Release](https://img.shields.io/badge/release-v0.10.0--rc.1-blue)](https://github.com/SoupNChill/internal_email_tool/releases)
 [![Python](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/)
 
 **A self-hosted transactional email API.** One clean endpoint for every product
@@ -221,7 +221,7 @@ the only workflow holding `packages: write`.
 
 ## Project status
 
-**v0.9.0-rc.1** — feature complete and packaged. The full lifecycle (install →
+**v0.10.0-rc.1** — feature complete and packaged. The full lifecycle (install →
 data → restart → container replacement → backup → destroy → restore → verify →
 send) has been demonstrated end to end on a clean installation.
 
