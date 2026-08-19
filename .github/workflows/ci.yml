@@ -180,12 +180,11 @@ jobs:
       - name: Syntax
         run: |
           bash -n deploy/appctl
-          bash -n deploy/install.sh
           bash -n scripts/secret-scan.sh
       - name: ShellCheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck -S warning deploy/appctl deploy/install.sh scripts/secret-scan.sh
+          shellcheck -S warning deploy/appctl scripts/secret-scan.sh
 
   compose:
     name: Production compose is deployable
@@ -201,20 +200,54 @@ jobs:
           fi
           echo "no build directives"
 
-      - name: Refuses an unpinned version
+      # This replaced a check that compose REFUSED to start without an explicit
+      # EMAILD_VERSION. That requirement was what forced an installer to exist,
+      # and it has been removed deliberately. The rule it was protecting -- §8,
+      # never deploy a moving tag -- has not changed, so it is asserted against
+      # the default itself rather than against the absence of one.
+      - name: The default version is an exact pin, not a moving tag
         run: |
-          if POSTGRES_PASSWORD=x EMAILD_MAILBOX_ENCRYPTION_KEY=y \
-             docker compose -f deploy/compose.yaml config --quiet 2>/dev/null; then
-            echo "::error::compose accepted a missing EMAILD_VERSION"
+          default="$(grep -oP 'EMAILD_VERSION:-\K[^}]+' deploy/compose.yaml)"
+          if [ -z "$default" ]; then
+            echo "::error::deploy/compose.yaml has no default EMAILD_VERSION"
             exit 1
           fi
-          echo "unpinned version correctly refused"
+          case "$default" in
+            latest|stable|main|dev|edge|release)
+              echo "::error::default version '$default' is a moving tag (§8)"
+              exit 1 ;;
+          esac
+          echo "default version is '$default'"
 
-      - name: Validates when pinned
+      # The headline property of the install: three commands, no configuration.
+      # If this ever fails, someone has reintroduced a mandatory variable and
+      # the documented install is broken.
+      - name: Validates with NO environment variables at all
         run: |
-          EMAILD_VERSION=0.0.0-test POSTGRES_PASSWORD=x EMAILD_MAILBOX_ENCRYPTION_KEY=y \
+          env -u EMAILD_VERSION -u POSTGRES_PASSWORD -u EMAILD_MAILBOX_ENCRYPTION_KEY \
             docker compose -f deploy/compose.yaml config --quiet
-          echo "valid"
+          echo "zero-configuration compose is valid"
+
+      - name: The API never mounts the worker's secrets volume
+        run: |
+          python3 - <<'EOF'
+          import sys
+          text = open("deploy/compose.yaml").read()
+          api = text.split("  api:", 1)[1].split("\n  worker:", 1)[0]
+          # Comments in this block legitimately mention worker_secrets to
+          # explain why it is absent, so match declarations only.
+          mounts = [
+              ln.strip() for ln in api.splitlines()
+              if ln.strip().startswith("- ") and "_secrets:" in ln
+          ]
+          if any("worker_secrets" in m for m in mounts):
+              print("::error::the api service mounts worker_secrets -- it could read the mailbox encryption key")
+              sys.exit(1)
+          if not any("api_secrets" in m for m in mounts):
+              print("::error::the api service has no secrets volume; the dashboard token cannot generate")
+              sys.exit(1)
+          print("api mounts only:", ", ".join(mounts))
+          EOF
 
       - name: Database publishes no port
         run: |

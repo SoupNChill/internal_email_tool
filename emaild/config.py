@@ -92,6 +92,13 @@ class Settings(BaseSettings):
     body_retention_hours: int = 72
     idempotency_ttl_hours: int = 24
 
+    # --- Secret bootstrap ---
+    # Directory holding secrets that generate themselves on first boot. Set by
+    # compose to a per-role volume; unset everywhere else, which disables the
+    # mechanism entirely so tests and host-side runs behave exactly as before.
+    # An explicit environment variable always wins over the file.
+    secrets_dir: str | None = None
+
     # --- Network ---
     trusted_proxy_hosts: str = ""
 
@@ -143,6 +150,45 @@ class Settings(BaseSettings):
                 'print(Fernet.generate_key().decode())"'
             )
         return v
+
+    @model_validator(mode="after")
+    def _bootstrap_secrets_from_volume(self) -> Settings:
+        """Fill in secrets this role needs but was not given, from its volume.
+
+        Runs BEFORE _enforce_role_secret_scoping (pydantic executes "after"
+        model validators in definition order), so the scoping rules below see
+        the finished picture and still reject anything a role must not hold.
+
+        Nothing happens without secrets_dir, so this is inert in tests and in
+        any deployment that keeps supplying secrets by environment variable.
+        """
+        if not self.secrets_dir:
+            return self
+
+        # Imported here rather than at module scope: config.py is imported by
+        # alembic/env.py and by tooling that has no business touching a volume.
+        from emaild.secretstore import read_or_create
+
+        if self.role in (Role.WORKER, Role.ADMIN) and not self.mailbox_encryption_key:
+            key = read_or_create(self.secrets_dir, "mailbox_encryption_key", _new_fernet_key)
+            if len(key) != 44:
+                raise ValueError(
+                    f"the stored mailbox encryption key in {self.secrets_dir} is "
+                    f"{len(key)} characters, not 44. It is corrupt or truncated; "
+                    "restore it from backup rather than letting a new one be made."
+                )
+            self.mailbox_encryption_key = key
+
+        # The API never touches the mailbox key -- it does not mount that
+        # volume -- but it does need a dashboard password, and generating one
+        # is what lets `docker compose up` satisfy the production dashboard
+        # rule below without the operator choosing anything.
+        if self.role is Role.API and self.dashboard_enabled and not self.dashboard_token:
+            self.dashboard_token = read_or_create(
+                self.secrets_dir, "dashboard_token", _new_dashboard_token
+            )
+
+        return self
 
     @model_validator(mode="after")
     def _enforce_role_secret_scoping(self) -> Settings:
@@ -222,6 +268,25 @@ class Settings(BaseSettings):
             "mxroute_credentials": "set" if self.mxroute_api_key else "unset",
             "trusted_proxies": len(self.trusted_proxies),
         }
+
+
+def _new_fernet_key() -> str:
+    """A 44-character urlsafe-base64 Fernet key.
+
+    Built from `secrets` rather than `Fernet.generate_key()` so that config.py
+    does not import cryptography, which alembic and other importers would then
+    pay for. The encoding is identical -- 32 random bytes, urlsafe-base64.
+    """
+    import base64
+    import secrets
+
+    return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+
+
+def _new_dashboard_token() -> str:
+    import secrets
+
+    return secrets.token_urlsafe(24)
 
 
 def _redact_dsn(dsn: str) -> str:

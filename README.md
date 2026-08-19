@@ -84,14 +84,17 @@ is the whole API in two minutes.
 **Running the service?** → **[docs/installation.md](docs/installation.md)**.
 
 ```bash
-# Copy the whole deploy/ directory to the target host, then, on that host:
-sudo bash install.sh --version 0.9.0-rc.1 --lan --port 8000
-cd /opt/emaild && sudo ./appctl doctor
+sudo mkdir -p /opt/emaild && sudo chown $USER /opt/emaild && cd /opt/emaild
+curl -fsSL https://raw.githubusercontent.com/SoupNChill/internal_email_tool/main/deploy/compose.yaml -o compose.yaml
+docker compose up -d
 ```
 
-`bash install.sh` rather than `./install.sh` because FTP clients drop the
-executable bit; see [installation.md](docs/installation.md) for the full
-transfer recipe.
+No `.env`, no installer: the version is pinned in the compose file and both
+secrets generate themselves on first boot. Upgrading is
+`docker compose pull && docker compose up -d`.
+
+Then save the encryption key, which is the one thing that cannot be
+regenerated — see [installation.md](docs/installation.md).
 
 **Working on emaild itself?** See [Development](#development).
 

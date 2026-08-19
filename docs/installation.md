@@ -21,91 +21,75 @@ timeout 5 bash -c 'cat < /dev/null > /dev/tcp/chocobo.mxrouting.net/465' \
   && echo "465 reachable" || echo "465 BLOCKED — emaild cannot deliver from here"
 ```
 
-## Getting the files onto the host
-
-The host needs the whole of `deploy/` — **three files**, and the installer
-refuses to start without all of them:
-
-| File | Why it is needed |
-|---|---|
-| `install.sh` | The installer itself |
-| `compose.yaml` | Defines the services; copied into the installation |
-| `appctl` | Every operator command from here on — `doctor`, `backup`, `admin` |
-
-Copy the **directory**, not the files you happen to click on. From a machine
-with a checkout:
-
-```bash
-tar czf emaild-deploy.tar.gz deploy/
-scp emaild-deploy.tar.gz you@host:~
-```
-
-Then on the host:
-
-```bash
-tar xzf emaild-deploy.tar.gz && cd deploy
-```
-
-The repository is private, so `git clone` on the target host would need an SSH
-key deployed there. Copying the tarball avoids putting repository credentials
-on a mail server that does not need them.
-
 ## Install
 
 ```bash
-sudo bash install.sh --version 0.9.0-rc.1 --lan --port 8000
+sudo mkdir -p /opt/emaild && sudo chown $USER /opt/emaild && cd /opt/emaild
+curl -fsSL https://raw.githubusercontent.com/SoupNChill/internal_email_tool/main/deploy/compose.yaml -o compose.yaml
+docker compose up -d
 ```
 
-### Why `bash install.sh` and not `./install.sh`
+That is the entire installation. There is no `.env` to write first and no
+installer to run.
 
-Because it works in every case. Graphical FTP clients — FileZilla, WinSCP,
-Cyberduck — do **not** preserve the Unix executable bit, so a transferred
-`install.sh` arrives unexecutable and `./install.sh` fails with:
+If `docker compose` says *permission denied* or *cannot connect to the Docker
+daemon*, add yourself to the `docker` group once and log back in:
 
-```
--bash: ./install.sh: Permission denied
-```
-
-Reaching for `sudo` then produces a genuinely misleading error:
-
-```
-sudo: ./install.sh: command not found
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
 ```
 
-The file is right there. `sudo` reports "command not found" for a file it
-cannot execute, which sends you looking for a missing program instead of a
-missing permission bit. Invoking `bash` explicitly sidesteps the bit entirely.
-(`chmod +x install.sh` also works, if you prefer.)
+### Why there is nothing to configure
 
-### Why `sudo`
+Everything has a working default, and the two secrets generate themselves the
+first time the containers start:
 
-The default `--dir` is `/opt/emaild`, which needs root to create, and talking
-to the Docker daemon needs root unless your user is in the `docker` group.
-Running the installer under `sudo` covers both.
-
-One consequence: the installation directory is then owned by root, so operator
-commands are `sudo ./appctl …` rather than `./appctl …`. The rest of this
-documentation writes `./appctl` for brevity — add `sudo` if you installed this
-way.
-
-| Flag | Meaning |
+| | Where it comes from |
 |---|---|
-| `--version` | **Required.** Production must pin an exact version, never a moving tag. |
-| `--lan` | Bind to `0.0.0.0` so other machines can reach it. Omit for localhost-only. |
-| `--port` | Host port. Checked for availability before anything is created. |
-| `--dir` | Installation directory. Default `/opt/emaild`. |
+| Version | Pinned in `compose.yaml`. Change that line to upgrade. |
+| Database password | A default. Postgres publishes no port, so it is unreachable from outside the compose network. |
+| Mailbox encryption key | Generated on first boot into the `worker_secrets` volume. |
+| Dashboard password | Generated on first boot into the `api_secrets` volume. |
 
-The installer checks the host, refuses to proceed if a conflicting database
-volume exists, generates all secrets, pulls the pinned image, runs migrations,
-starts the services, and waits for health. It stops before doing damage rather
-than part-way through.
+This used to be an `install.sh` whose only job was generating those two
+secrets. Removing the requirement removed the installer.
 
-### What `--lan` costs you
+**Save the encryption key today.** It is the one thing that cannot be
+regenerated — a database backup restored without it leaves every stored mailbox
+password unreadable:
 
-The API is reachable from your whole network over plain HTTP, so
-`Authorization: Bearer em_live_…` travels in **cleartext** and is readable by
-anything else on that network. On a trusted home LAN that is normally accepted.
-The installer generates a dashboard password because of it.
+```bash
+./appctl key
+```
+
+### Get `appctl` too
+
+`compose.yaml` runs the service; `appctl` operates it — `doctor`, `backup`,
+`key`, `admin`. It is not required to start, but you want it before anything
+goes wrong:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SoupNChill/internal_email_tool/main/deploy/appctl -o appctl
+chmod +x appctl
+./appctl doctor
+```
+
+The `chmod` matters if you transferred the file with a graphical FTP client
+(FileZilla, WinSCP, Cyberduck) — none of them preserve the Unix executable bit,
+and the resulting error is misleading: `./appctl` says *Permission denied*,
+while `sudo ./appctl` says *command not found* for a file that is plainly
+there. `bash appctl …` works regardless of the bit.
+
+### Reachable from the LAN by default
+
+The API binds `0.0.0.0`, because a transactional email API that only its own
+host can call has no callers. On a trusted home LAN this is the intended shape.
+
+It costs you cleartext: `Authorization: Bearer em_live_…` is readable by
+anything else on that network. Two ways to change that — set
+`EMAILD_BIND=127.0.0.1` in a `.env` beside `compose.yaml` if the products
+calling it run on this same machine, or run the `public` profile for HTTPS.
 
 For HTTPS, or reachability beyond the LAN, see
 [operations.md](operations.md#exposing-emaild-beyond-the-lan).
@@ -185,16 +169,19 @@ Exit 0 means everything checks out. Then send a test message using
 ```bash
 cd /opt/emaild
 ./appctl backup                   # never upgrade without one
-nano .env                         # change EMAILD_VERSION
-./appctl stop && ./appctl start
+nano compose.yaml                 # change the version on the x-image line
+docker compose pull
+docker compose up -d
 ./appctl doctor
 ```
 
 Migrations run automatically as a separate step before the application starts.
 If one fails, the application does not start — restore the pre-upgrade backup.
 
-Re-running `install.sh` over an existing installation is **refused**: it would
-overwrite the encryption key and make every stored credential undecryptable.
+Upgrading never touches the secrets: they live in their own volumes, which
+`docker compose up -d` leaves alone. `docker compose down -v` would destroy
+them along with the database, which is why that flag appears nowhere in this
+documentation except as a warning.
 
 ## Uninstalling
 

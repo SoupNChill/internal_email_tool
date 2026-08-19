@@ -26,5 +26,8 @@ for _leaky in (
     "EMAILD_MAILBOX_ENCRYPTION_KEY",
     "EMAILD_ROLE",
     "EMAILD_ENV",
+    # Would otherwise point tests at a real secrets volume, and -- worse --
+    # let one test's generated key leak into another's expectations.
+    "EMAILD_SECRETS_DIR",
 ):
     os.environ.pop(_leaky, None)

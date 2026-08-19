@@ -142,12 +142,22 @@ does not need the old key.
 On a new host:
 
 ```bash
-./install.sh --version <same version> --lan
-cd /opt/emaild
-nano .env                     # restore EMAILD_MAILBOX_ENCRYPTION_KEY from your password manager
+sudo mkdir -p /opt/emaild && sudo chown $USER /opt/emaild && cd /opt/emaild
+curl -fsSL https://raw.githubusercontent.com/SoupNChill/internal_email_tool/main/deploy/compose.yaml -o compose.yaml
+
+# Put the ORIGINAL key back BEFORE the first start. A fresh install generates a
+# new one on first boot, and the archive's ciphertext was written under the old
+# one -- start first and you restore data you cannot read.
+printf 'EMAILD_MAILBOX_ENCRYPTION_KEY=%s\n' "<key from your password manager>" > .env
+chmod 600 .env
+
+docker compose up -d
 ./appctl restore /path/to/archive.tar.gz --force
 ./appctl doctor
 ```
+
+An explicit key in `.env` always beats the generated one (`emaild/config.py`),
+so the volume never gets a key of its own and nothing has to be undone.
 
 Install the **same version** the archive was taken from — the manifest records
 it. A newer version may have migrations the archive's schema has not seen.

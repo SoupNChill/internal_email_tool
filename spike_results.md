@@ -1,5 +1,9 @@
 # Phase 0 — SMTP Spike Results
 
+> Server responses below are verbatim except that the real test domain and
+> mailbox have been replaced with `example.com` / `example.net` throughout.
+> Only the identifiers changed; every status code and message is as captured.
+
 **Run:** 2026-08-06 · `chocobo.mxrouting.net:465` · `sender@example.com`
 **Server:** Exim 4.99.1 · TLS 1.3 (`TLS_AES_256_GCM_SHA384`, 256-bit)
 **Messages actually delivered:** 1. All other cases stopped at `RSET` before `DATA`.

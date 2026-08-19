@@ -48,6 +48,15 @@ COPY --chown=emaild:emaild emaild ./emaild
 COPY --chown=emaild:emaild alembic ./alembic
 COPY --chown=emaild:emaild alembic.ini ./
 
+# Mountpoint for the self-generating secrets volume (emaild/secretstore.py).
+# It must exist IN THE IMAGE, owned by emaild: Docker copies the ownership of
+# an existing directory onto a fresh named volume, and creates it root-owned if
+# the path is absent. Without this the container -- which runs as uid 10001 --
+# could not write the key it is supposed to generate on first boot.
+RUN mkdir -p /var/lib/emaild/secrets \
+    && chown -R emaild:emaild /var/lib/emaild \
+    && chmod 700 /var/lib/emaild/secrets
+
 USER emaild
 
 # Metadata (§19). Overridden with real values by the release workflow.

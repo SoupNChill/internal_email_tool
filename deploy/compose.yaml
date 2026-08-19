@@ -1,7 +1,16 @@
 # emaild -- production deployment.
 #
-# This file is what runs on the destination host. It differs from the repository
-# root's docker-compose.yml in three ways that matter (§8):
+#   mkdir -p /opt/emaild && cd /opt/emaild
+#   curl -fsSL https://raw.githubusercontent.com/SoupNChill/internal_email_tool/main/deploy/compose.yaml -o compose.yaml
+#   docker compose up -d
+#
+# That is the whole installation. There is no .env to write first and no
+# installer to run: every secret this needs generates itself on first boot into
+# a volume (emaild/secretstore.py). To upgrade, change the version on the
+# x-image line below, then `docker compose pull && docker compose up -d`.
+#
+# This file differs from the repository root's docker-compose.yml in three ways
+# that matter (§8):
 #
 #   1. No `build:`. Production must never compile on the destination server.
 #   2. Images are pinned to an exact version, never `latest`.
@@ -9,14 +18,17 @@
 #      IS production by definition, and leaving it configurable is how an
 #      unauthenticated dashboard ends up on a LAN by accident.
 #
-#   appctl start | stop | status | backup | restore
-#
-# For LAN access set EMAILD_BIND=0.0.0.0 in .env. See install.sh, which will
-# refuse to leave the dashboard open when you do.
+# Everything below can still be overridden from a .env file beside this one.
+# The defaults exist so that not writing one is a supported choice rather than
+# a shortcut you get away with.
 
 name: emaild
 
-x-image: &image "${EMAILD_IMAGE:-ghcr.io/soupnchill/emaild}:${EMAILD_VERSION:?EMAILD_VERSION must be pinned to an exact version}"
+# The version lives HERE, in the file you downloaded, rather than in a .env the
+# operator has to create before anything will start. Pinning is preserved --
+# this is an exact version and `latest` is still never used -- but the pin now
+# travels with the artifact that needs it, which is also how you upgrade.
+x-image: &image "${EMAILD_IMAGE:-ghcr.io/soupnchill/emaild}:${EMAILD_VERSION:-0.9.0-rc.1}"
 
 services:
   postgres:
@@ -24,7 +36,12 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-emaild}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      # A default, not a generated secret. Postgres publishes no port (see the
+      # note below), so this password is only reachable from inside this
+      # compose network -- anyone who can reach it already has the host.
+      # Making the operator invent one was a mandatory install step that
+      # protected nothing. Override POSTGRES_PASSWORD in .env if you disagree.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-emaild}
       POSTGRES_DB: ${POSTGRES_DB:-emaild}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     volumes:
@@ -45,7 +62,7 @@ services:
         condition: service_healthy
     environment:
       # Only the DSN. Schema changes need no application secrets.
-      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-emaild}
+      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD:-emaild}@postgres:5432/${POSTGRES_DB:-emaild}
     command: ["alembic", "upgrade", "head"]
     restart: "no"
 
@@ -60,17 +77,32 @@ services:
     environment:
       EMAILD_ROLE: api
       EMAILD_ENV: production
-      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-emaild}
+      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD:-emaild}@postgres:5432/${POSTGRES_DB:-emaild}
       EMAILD_LOG_LEVEL: ${EMAILD_LOG_LEVEL:-INFO}
       EMAILD_TRUSTED_PROXY_HOSTS: ${EMAILD_TRUSTED_PROXY_HOSTS:-}
       EMAILD_DASHBOARD_ENABLED: ${EMAILD_DASHBOARD_ENABLED:-true}
       EMAILD_DASHBOARD_TOKEN: ${EMAILD_DASHBOARD_TOKEN:-}
       EMAILD_DASHBOARD_BEHIND_PROXY_AUTH: ${EMAILD_DASHBOARD_BEHIND_PROXY_AUTH:-false}
+      # Generates a dashboard password on first boot when none was supplied.
+      # That is what lets the production dashboard rule in config.py be
+      # satisfied without the operator having to choose anything. Read it back
+      # with `./appctl key`.
+      EMAILD_SECRETS_DIR: /var/lib/emaild/secrets
       # Deliberately absent: MAILBOX_ENCRYPTION_KEY and MXROUTE_*.
+    volumes:
+      # api_secrets, NOT worker_secrets. The API cannot read the mailbox
+      # encryption key because it does not mount the volume holding it -- a
+      # stronger guarantee than the startup check in config.py, because it
+      # holds even if that check is ever wrong.
+      - api_secrets:/var/lib/emaild/secrets
     ports:
-      # 127.0.0.1 by default. Set EMAILD_BIND=0.0.0.0 for LAN reachability --
-      # and read what install.sh says about cleartext API keys before you do.
-      - "${EMAILD_BIND:-127.0.0.1}:${API_HOST_PORT:-8000}:8000"
+      # LAN-reachable by default: a transactional email API that only its own
+      # host can call has no callers, and every product that needs it runs
+      # somewhere else. On a home LAN this is the intended shape. It costs you
+      # cleartext API keys on that network -- set EMAILD_BIND=127.0.0.1 if the
+      # callers live on this same machine, or run the `public` profile for
+      # HTTPS and a hostname reachable from beyond it.
+      - "${EMAILD_BIND:-0.0.0.0}:${API_HOST_PORT:-8000}:8000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=5).status==200 else 1)\""]
       interval: 15s
@@ -89,10 +121,17 @@ services:
     environment:
       EMAILD_ROLE: worker
       EMAILD_ENV: production
-      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-emaild}
+      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD:-emaild}@postgres:5432/${POSTGRES_DB:-emaild}
       EMAILD_LOG_LEVEL: ${EMAILD_LOG_LEVEL:-INFO}
-      EMAILD_MAILBOX_ENCRYPTION_KEY: ${EMAILD_MAILBOX_ENCRYPTION_KEY:?worker requires the mailbox encryption key}
+      # No longer `:?`. Absent now means "generate one into the volume on first
+      # boot", which is what removed the need for an installer. Supplying it
+      # explicitly still wins, so an existing installation that already has a
+      # key in .env keeps working untouched.
+      EMAILD_MAILBOX_ENCRYPTION_KEY: ${EMAILD_MAILBOX_ENCRYPTION_KEY:-}
+      EMAILD_SECRETS_DIR: /var/lib/emaild/secrets
       # Deliberately absent: MXROUTE_*.
+    volumes:
+      - worker_secrets:/var/lib/emaild/secrets
     # No ports. Outbound SMTP only.
     command: ["python", "-m", "emaild.worker"]
     stop_grace_period: 45s
@@ -110,12 +149,19 @@ services:
     environment:
       EMAILD_ROLE: admin
       EMAILD_ENV: production
-      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-emaild}
+      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD:-emaild}@postgres:5432/${POSTGRES_DB:-emaild}
       EMAILD_LOG_LEVEL: ${EMAILD_LOG_LEVEL:-WARNING}
       EMAILD_MAILBOX_ENCRYPTION_KEY: ${EMAILD_MAILBOX_ENCRYPTION_KEY:-}
+      EMAILD_SECRETS_DIR: /var/lib/emaild/secrets
       EMAILD_MXROUTE_SERVER: ${EMAILD_MXROUTE_SERVER:-}
       EMAILD_MXROUTE_USERNAME: ${EMAILD_MXROUTE_USERNAME:-}
       EMAILD_MXROUTE_API_KEY: ${EMAILD_MXROUTE_API_KEY:-}
+    volumes:
+      # The SAME volume as the worker. Admin encrypts mailbox passwords that
+      # the worker must later decrypt; two different keys here would produce
+      # credentials that store cleanly and then fail to send, which is the
+      # worst possible moment to discover the mistake.
+      - worker_secrets:/var/lib/emaild/secrets
     entrypoint: ["python", "-m", "emaild.admin"]
 
   # Opt-in. Gives HTTPS and a hostname reachable from outside the LAN --
@@ -135,6 +181,18 @@ services:
     # complete an SSO challenge and would receive HTML where it expects JSON.
 
 volumes:
+  # Split by role on purpose: Docker decides which container can read which
+  # secret, rather than the application promising not to look. See the comment
+  # on the api service.
+  api_secrets:
+    driver: local
+
+  worker_secrets:
+    driver: local
+    # Holds the mailbox encryption key. `appctl backup` deliberately does NOT
+    # include this -- a leaked database archive must not also carry the key
+    # that decrypts what is inside it. Save it separately: `./appctl key`.
+
   postgres_data:
     driver: local
     # NOT a backup (§14). Use `appctl backup`, and keep the archives on a

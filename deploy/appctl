@@ -43,19 +43,61 @@ die() { err "$*"; exit "$EX_FAIL"; }
 
 compose() { docker compose "$@"; }
 
+# A .env is OPTIONAL now. compose.yaml carries a working default for every
+# value, and the secrets generate themselves into volumes on first boot, so an
+# installation that never wrote one is normal rather than broken. What appctl
+# genuinely cannot work without is the compose file.
 require_env() {
-  [ -f .env ] || die ".env not found in $SCRIPT_DIR. Copy .env.example and fill it in."
+  [ -f compose.yaml ] || die "compose.yaml not found in $SCRIPT_DIR. Is this an emaild installation?"
 }
 
-# Read one variable from .env WITHOUT sourcing the file -- sourcing would execute
-# whatever is in it and leak every value into this shell's environment.
+# Resolve one configuration variable the SAME WAY compose does: the process
+# environment wins over .env. Reading only .env made appctl disagree with the
+# containers it is reporting on -- `API_HOST_PORT=8080 docker compose up` put
+# the API on 8080 while `appctl health` went on probing 8000 and called it
+# down.
+#
+# The file is parsed, never sourced: sourcing executes whatever is in it and
+# leaks every value into this shell's environment.
 env_get() {
   local key="$1"
+  if [ -n "${!key-}" ]; then
+    printf '%s' "${!key}"
+    return 0
+  fi
+  [ -f .env ] || return 0
   sed -n "s/^${key}=//p" .env | head -1 | tr -d '\r'
 }
 
 pg_user() { local v; v="$(env_get POSTGRES_USER)"; printf '%s' "${v:-emaild}"; }
 pg_db()   { local v; v="$(env_get POSTGRES_DB)";   printf '%s' "${v:-emaild}"; }
+
+# Read a self-generated secret out of the volume that holds it.
+#
+# `compose run` rather than `docker run` so that compose resolves the image and
+# the volume name itself -- hardcoding "emaild_worker_secrets" here would break
+# the moment someone changes the project name. --no-deps keeps this from
+# starting postgres just to read a file.
+read_volume_secret() {
+  local service="$1" name="$2"
+  compose run --rm --no-deps --entrypoint cat "$service" \
+    "/var/lib/emaild/secrets/${name}" 2>/dev/null | tr -d '\r\n'
+}
+
+# An explicitly configured value always wins over the generated one, matching
+# the precedence in emaild/config.py. Order matters: reversing it would make an
+# installation ignore the key its operator deliberately set.
+mailbox_key() {
+  local v; v="$(env_get EMAILD_MAILBOX_ENCRYPTION_KEY)"
+  if [ -n "$v" ]; then printf '%s' "$v"; return; fi
+  read_volume_secret worker mailbox_encryption_key
+}
+
+dashboard_token() {
+  local v; v="$(env_get EMAILD_DASHBOARD_TOKEN)"
+  if [ -n "$v" ]; then printf '%s' "$v"; return; fi
+  read_volume_secret api dashboard_token
+}
 
 psql_q() {
   compose exec -T postgres psql -U "$(pg_user)" -d "$(pg_db)" -tAc "$1" 2>/dev/null | tr -d '\r'
@@ -150,17 +192,23 @@ cmd_config_check() {
   require_env
   local problems=0
 
-  [ "$(stat -c %a .env 2>/dev/null || echo 600)" = "600" ] \
-    && ok ".env permissions are 600" \
-    || { warn ".env is not mode 600 -- it holds two secrets"; problems=$((problems+1)); }
+  if [ -f .env ]; then
+    [ "$(stat -c %a .env 2>/dev/null || echo 600)" = "600" ] \
+      && ok ".env permissions are 600" \
+      || { warn ".env is not mode 600 -- it holds secrets"; problems=$((problems+1)); }
+  else
+    ok "no .env (using compose defaults and generated secrets)"
+  fi
 
+  # Empty means "compose will use its default", which is a working
+  # configuration now rather than a missing one. Only a placeholder is wrong.
   local pw; pw="$(env_get POSTGRES_PASSWORD)"
-  [ -n "$pw" ] && ok "POSTGRES_PASSWORD set" || { bad "POSTGRES_PASSWORD is empty"; problems=$((problems+1)); }
+  [ -n "$pw" ] && ok "POSTGRES_PASSWORD overridden in .env" || ok "POSTGRES_PASSWORD using compose default"
   case "$pw" in *CHANGEME*) bad "POSTGRES_PASSWORD is still a placeholder"; problems=$((problems+1));; esac
 
-  local key; key="$(env_get EMAILD_MAILBOX_ENCRYPTION_KEY)"
+  local key; key="$(mailbox_key)"
   if [ -z "$key" ]; then
-    bad "EMAILD_MAILBOX_ENCRYPTION_KEY is empty -- the worker cannot decrypt credentials"
+    bad "no mailbox encryption key -- set EMAILD_MAILBOX_ENCRYPTION_KEY, or start the worker once to generate one"
     problems=$((problems+1))
   elif [ "${#key}" -ne 44 ]; then
     bad "EMAILD_MAILBOX_ENCRYPTION_KEY is ${#key} chars, expected 44"
@@ -169,10 +217,14 @@ cmd_config_check() {
     ok "mailbox encryption key present (fingerprint $(key_fingerprint | cut -c1-19)...)"
   fi
 
+  # compose.yaml hardcodes EMAILD_ENV=production for every service, so this is
+  # production whether or not a .env says anything. Checking env_get alone made
+  # the dashboard check silently skip on a zero-config install -- exactly the
+  # installation least likely to have configured auth by hand.
   local env_name; env_name="$(env_get EMAILD_ENV)"
-  if [ "$env_name" = "production" ]; then
+  if [ "${env_name:-production}" = "production" ]; then
     local tok proxy enabled
-    tok="$(env_get EMAILD_DASHBOARD_TOKEN)"
+    tok="$(dashboard_token)"
     proxy="$(env_get EMAILD_DASHBOARD_BEHIND_PROXY_AUTH)"
     enabled="$(env_get EMAILD_DASHBOARD_ENABLED)"
     if [ "$enabled" != "false" ] && [ -z "$tok" ] && [ "$proxy" != "true" ]; then
@@ -206,9 +258,41 @@ cmd_config_check() {
 # itself never does. A backup carrying both the ciphertext and the key that
 # decrypts it is a backup whose compromise equals plaintext.
 key_fingerprint() {
-  local key; key="$(env_get EMAILD_MAILBOX_ENCRYPTION_KEY)"
+  local key; key="$(mailbox_key)"
   [ -n "$key" ] || { printf 'sha256:unset'; return; }
   printf 'sha256:%s' "$(printf '%s' "$key" | sha256sum | cut -d' ' -f1)"
+}
+
+# ---------------------------------------------------------------------------
+# key -- print the secrets that are not in any backup
+# ---------------------------------------------------------------------------
+
+cmd_key() {
+  require_env
+  local key tok
+  key="$(mailbox_key)"
+  tok="$(dashboard_token)"
+
+  if [ -z "$key" ]; then
+    die "no mailbox encryption key yet. Run './appctl start' once; the worker generates it on first boot."
+  fi
+
+  cat <<INTRO
+
+These are generated once and stored in a Docker volume on this host. They are
+deliberately NOT in \`appctl backup\` archives -- an archive that carried the
+key that decrypts it would be worth no more than plaintext.
+
+Copy the encryption key into a password manager NOW. A database backup without
+it can still be restored, but every stored mailbox password in it becomes
+unreadable and each mailbox has to be re-provisioned.
+
+INTRO
+
+  printf '  mailbox encryption key   %s\n' "$key"
+  printf '  fingerprint              %s\n' "$(key_fingerprint | cut -c1-26)..."
+  [ -n "$tok" ] && printf '  dashboard password       %s\n' "$tok"
+  printf '\n'
 }
 
 cmd_backup() {
@@ -440,7 +524,8 @@ appctl -- operator control for emaild
   health                     ready check; exit 1 when unhealthy
   logs [args]                docker compose logs passthrough
   admin <cmd> [args]         provisioning: domains, mailboxes, keys, suppressions
-  config-check               validate .env before an upgrade
+  key                        print the encryption key and dashboard password
+  config-check               validate configuration before an upgrade
   backup [--to DIR]          consistent dump + manifest + checksums
   restore ARCHIVE [--force]  restore; refuses to overwrite live data
   doctor                     everything above, as one report
@@ -458,6 +543,7 @@ case "${1:-}" in
   health)       shift; cmd_health "$@" ;;
   logs)         shift; cmd_logs "$@" ;;
   admin)        shift; cmd_admin "$@" ;;
+  key)          shift; cmd_key "$@" ;;
   config-check) shift; cmd_config_check "$@" ;;
   backup)       shift; cmd_backup "$@" ;;
   restore)      shift; cmd_restore "$@" ;;
