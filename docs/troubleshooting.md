@@ -10,6 +10,57 @@ Start with:
 
 ---
 
+## Installing: `curl: (23) Failure writing output to destination`
+
+The download worked; writing the file did not. The installation directory
+belongs to root and you are not root.
+
+```bash
+sudo chown $USER /opt/emaild
+```
+
+curl reports this as a *write* failure rather than "permission denied", which
+sends people looking at the URL instead of the directory. The URL is fine.
+
+This bites when `/opt/emaild` was created by an earlier `sudo mkdir` — the
+documented install includes `sudo chown $USER` for exactly this reason.
+
+## Installing: `curl: (22) ... error: 404` on the compose file
+
+Almost always a wrapped paste. Long URLs break across lines in a terminal and
+the shell receives two broken fragments:
+
+```
+internal_email_tool/ma
+  in/deploy/compose.yaml
+```
+
+Paste the `curl` line on its own, or check `main` survived intact. To confirm
+the file really is reachable:
+
+```bash
+curl -sI https://raw.githubusercontent.com/SoupNChill/internal_email_tool/main/deploy/compose.yaml | head -1
+```
+
+## Installing: `denied` or `unauthorized` pulling the image
+
+Repository visibility and package visibility are separate settings on GitHub. A
+public repo can still have a private image, and then `docker compose up -d`
+fails at the pull.
+
+Check without credentials:
+
+```bash
+token=$(curl -fsSL "https://ghcr.io/token?scope=repository:soupnchill/emaild:pull&service=ghcr.io" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $token" \
+  https://ghcr.io/v2/soupnchill/emaild/manifests/0.10.0-rc.1
+```
+
+`200` means public. `403` means the package is still private — fix it at
+*Packages → emaild → Package settings → Danger Zone → Change visibility*.
+
+---
+
 ## Mail is queued but nothing is being delivered
 
 **Check queue age first** — it is the one number that distinguishes the causes.
