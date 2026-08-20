@@ -28,7 +28,7 @@ name: emaild
 # operator has to create before anything will start. Pinning is preserved --
 # this is an exact version and `latest` is still never used -- but the pin now
 # travels with the artifact that needs it, which is also how you upgrade.
-x-image: &image "${EMAILD_IMAGE:-ghcr.io/soupnchill/emaild}:${EMAILD_VERSION:-0.10.0-rc.1}"
+x-image: &image "${EMAILD_IMAGE:-ghcr.io/soupnchill/emaild}:${EMAILD_VERSION:-0.11.0-rc.1}"
 
 services:
   postgres:

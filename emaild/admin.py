@@ -20,14 +20,13 @@ import asyncio
 import contextlib
 import sys
 from collections.abc import AsyncIterator, Callable, Coroutine
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 
 from emaild.bootstrap import get_installation
 from emaild.config import Role, Settings, get_settings
-from emaild.crypto import MailboxCipher, generate_api_key
+from emaild.crypto import MailboxCipher
 from emaild.db import dispose_engine, init_engine, session_scope
 from emaild.domains import (
     add_domain,
@@ -36,8 +35,14 @@ from emaild.domains import (
     required_dns_records,
 )
 from emaild.logging_config import configure_logging
+from emaild.management import (
+    ManagementError,
+    create_api_key,
+    create_project,
+    revoke_api_key,
+)
 from emaild.metrics import active_keys, build_overview
-from emaild.models import ApiKey, ApiKeyScope, Domain, Mailbox, Project
+from emaild.models import ApiKey, Domain, Mailbox, Project
 from emaild.providers.mxroute import (
     MXRouteAuthError,
     MXRouteClient,
@@ -323,13 +328,11 @@ async def cmd_mailboxes_rotate(args: argparse.Namespace, settings: Settings) -> 
 
 async def cmd_projects_create(args: argparse.Namespace, settings: Settings) -> int:
     async with session_scope() as session:
-        existing = (
-            await session.execute(select(Project).where(Project.name == args.name))
-        ).scalar_one_or_none()
-        if existing:
-            print(f"Project already exists: {args.name}", file=sys.stderr)
+        try:
+            await create_project(session, args.name, args.description, actor="cli")
+        except ManagementError as exc:
+            print(str(exc), file=sys.stderr)
             return EXIT_FAILED
-        session.add(Project(name=args.name, description=args.description))
     print(f"Created project {args.name}")
     return EXIT_OK
 
@@ -351,55 +354,30 @@ async def cmd_projects_list(args: argparse.Namespace, settings: Settings) -> int
 
 async def cmd_keys_create(args: argparse.Namespace, settings: Settings) -> int:
     async with session_scope() as session:
-        project = (
-            await session.execute(select(Project).where(Project.name == args.project))
-        ).scalar_one_or_none()
-        if project is None:
-            print(f"No such project: {args.project}", file=sys.stderr)
+        try:
+            _, full_key, scoped = await create_api_key(
+                session, args.name, args.project, args.mailbox, actor="cli"
+            )
+        except ManagementError as exc:
+            print(str(exc), file=sys.stderr)
             return EXIT_FAILED
-
-        mailboxes = (
-            (await session.execute(select(Mailbox).where(Mailbox.address.in_(args.mailbox))))
-            .scalars()
-            .all()
-        )
-        found = {m.address for m in mailboxes}
-        missing = set(args.mailbox) - found
-        if missing:
-            print(f"Unknown mailboxes: {', '.join(sorted(missing))}", file=sys.stderr)
-            return EXIT_FAILED
-
-        full_key, key_hash, prefix = generate_api_key()
-        api_key = ApiKey(
-            project_id=project.id, name=args.name, key_hash=key_hash, key_prefix=prefix
-        )
-        session.add(api_key)
-        await session.flush()
-        for mailbox in mailboxes:
-            session.add(ApiKeyScope(api_key_id=api_key.id, mailbox_id=mailbox.id))
 
     print(f"Created key '{args.name}' for project {args.project}")
     print(f"\n  {full_key}\n")
     print("  Shown once and never recoverable -- only a SHA-256 hash is stored.")
-    print(f"  Scoped to: {', '.join(sorted(found))}")
+    print(f"  Scoped to: {', '.join(scoped)}")
     return EXIT_OK
 
 
 async def cmd_keys_revoke(args: argparse.Namespace, settings: Settings) -> int:
     """Revoke a key. Takes effect on the next request -- auth is never cached."""
     async with session_scope() as session:
-        key = (
-            await session.execute(select(ApiKey).where(ApiKey.name == args.name))
-        ).scalar_one_or_none()
-        if key is None:
-            print(f"No such key: {args.name}", file=sys.stderr)
+        try:
+            message = await revoke_api_key(session, args.name, actor="cli")
+        except ManagementError as exc:
+            print(str(exc), file=sys.stderr)
             return EXIT_FAILED
-        if key.revoked_at is not None:
-            print(f"Key '{args.name}' was already revoked at {key.revoked_at:%Y-%m-%d %H:%M}")
-            return EXIT_OK
-        key.revoked_at = datetime.now(UTC)
-        key.active = False
-    print(f"Revoked '{args.name}'. Effective immediately -- authentication is not cached.")
+    print(message)
     return EXIT_OK
 
 

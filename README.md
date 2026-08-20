@@ -1,7 +1,7 @@
 # emaild
 
 [![CI](https://github.com/SoupNChill/internal_email_tool/actions/workflows/ci.yml/badge.svg)](https://github.com/SoupNChill/internal_email_tool/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.10.0--rc.1-blue)](https://github.com/SoupNChill/internal_email_tool/releases)
+[![Release](https://img.shields.io/badge/release-v0.11.0--rc.1-blue)](https://github.com/SoupNChill/internal_email_tool/releases)
 [![Python](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/)
 
 **A self-hosted transactional email API.** One clean endpoint for every product
@@ -71,7 +71,9 @@ Bad external recipients are accepted at RCPT and bounce out of band, so
 - **Honest failure classification** — built from responses captured on a live
   server, not guessed
 - **Suppression list** — fed automatically by provider rejections
-- **Read-only dashboard** — every mutation lives in the CLI, where it is logged
+- **Dashboard that does the daily work** — create projects and scoped API keys
+  in the browser; domain and mailbox provisioning stay in the CLI, because the
+  API container is not given the credentials they need
 - **Backup and restore** — proven by destroying an installation and rebuilding it
 
 ---
@@ -221,7 +223,7 @@ the only workflow holding `packages: write`.
 
 ## Project status
 
-**v0.10.0-rc.1** — feature complete and packaged. The full lifecycle (install →
+**v0.11.0-rc.1** — feature complete and packaged. The full lifecycle (install →
 data → restart → container replacement → backup → destroy → restore → verify →
 send) has been demonstrated end to end on a clean installation.
 

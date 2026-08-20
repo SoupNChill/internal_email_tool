@@ -6,21 +6,54 @@
   Addresses we refuse to send to. Bad external recipients are accepted at RCPT and bounce
   out of band, so this list is the only brake that exists.
 </p>
+
+<div class="panel">
+  <h3>Suppress an address</h3>
+  <p class="hint">Takes effect immediately. Adding fails closed; removing fails open.</p>
+  <form method="post" action="/suppressions/add">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="row">
+      <div class="field">
+        <label for="s-address">Address</label>
+        <input id="s-address" name="address" type="email" required
+               placeholder="someone@example.com">
+      </div>
+      <div class="field">
+        <label for="s-reason">Reason</label>
+        <input id="s-reason" name="reason" placeholder="optional">
+      </div>
+      <button type="submit">Suppress</button>
+    </div>
+  </form>
+</div>
+
 {% if not suppressions %}<div class="empty">Nothing suppressed.</div>{% else %}
 <table>
-  <tr><th>Address</th><th>Source</th><th>Reason</th><th>Added</th></tr>
+  <tr><th>Address</th><th>Source</th><th>Reason</th><th>Added</th><th></th></tr>
   {% for s in suppressions %}
   <tr>
     <td class="mono">{{ s.address }}</td>
     <td><span class="pill {{ 'warn' if s.source == 'bounce' else '' }}">{{ s.source }}</span></td>
     <td class="muted">{{ s.reason or '—' }}</td>
     <td class="muted">{{ s.created }}</td>
+    <td>
+      {#
+        Confirmed because this direction fails open: re-enabling mail to an
+        address that something already distrusted is how a domain's reputation
+        gets spent.
+      #}
+      <form method="post" action="/suppressions/remove"
+            onsubmit="return confirm('Resume sending to {{ s.address }}? It was suppressed for a reason ({{ s.source }}).')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="address" value="{{ s.address }}">
+        <button type="submit" class="link">remove</button>
+      </form>
+    </td>
   </tr>
   {% endfor %}
 </table>
 <p class="muted" style="font-size:.85rem">
-  Showing {{ suppressions|length }} of {{ total }}. Removal is operator-only and requires
-  <code>--yes</code>: adding fails closed, removing fails open.
+  Showing {{ suppressions|length }} of {{ total }}.
 </p>
 {% endif %}
 {% endblock %}

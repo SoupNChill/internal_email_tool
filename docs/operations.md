@@ -112,18 +112,43 @@ recipient as nonexistent.
 
 ## The dashboard
 
-`http://<host>:<port>/` — read-only by design. Every mutation is a CLI command,
-where it gets a confirmation and a log line.
+`http://<host>:<port>/` — where the day-to-day work happens.
 
-| Page | Answers |
-|---|---|
-| `/` | Is email healthy? |
-| `/domains` | Which can send, and exactly which records are missing |
-| `/messages` | Search by recipient, subject, or id; open one for its timeline |
-| `/keys` | What exists, scope, last used |
-| `/suppressions` | Who we refuse to mail, and why |
+| Page | Answers | Can change |
+|---|---|---|
+| `/` | Is email healthy? | — |
+| `/domains` | Which can send, and exactly which records are missing | — |
+| `/messages` | Search by recipient, subject, or id; open one for its timeline | — |
+| `/keys` | What exists, scope, last used | **projects, API keys** |
+| `/suppressions` | Who we refuse to mail, and why | **add, remove** |
 
-Log in with any username and `EMAILD_DASHBOARD_TOKEN` from `.env`.
+Log in with any username and the dashboard password:
+
+```bash
+./appctl key
+```
+
+### Why domains and mailboxes are not here
+
+Not caution — capability. Adding a domain or provisioning a mailbox needs the
+MXRoute account-root credential and the mailbox encryption key, and the API
+container holds neither: it does not mount the volume they live in. So the
+dashboard *cannot* perform them, whatever a future change might prefer.
+
+That split follows how often each is needed. Issuing a key for a new product
+happens constantly and is two clicks. Provisioning a mailbox happens once per
+sender, can breach MXRoute's acceptable-use policy, and still requires
+deliberately reaching for `appctl admin`.
+
+### Starting a new product, entirely in the browser
+
+1. `/keys` → **New project** → name it after the product
+2. **New key** → pick the project, tick the sender identities it may use
+3. Copy the key — **it is shown once and is never recoverable**
+4. Paste it into the product as `Authorization: Bearer …`
+
+Every change made here is logged with `actor="dashboard"`, so the audit trail
+distinguishes it from the CLI.
 
 ## Watching a specific message
 

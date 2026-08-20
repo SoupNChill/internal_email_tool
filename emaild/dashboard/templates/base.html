@@ -82,6 +82,29 @@
            border: 1px solid var(--line); background: var(--card);
            color: var(--fg); cursor: pointer; }
   .empty { color: var(--muted); padding: 2rem 0; text-align: center; }
+  button.primary { border-color: var(--accent); color: var(--accent); }
+  button.danger  { border-color: var(--bad);    color: var(--bad); }
+  button.link { border: none; background: none; padding: 0; color: var(--bad);
+                text-decoration: underline; cursor: pointer; font-size: .85rem; }
+  .panel { background: var(--card); border: 1px solid var(--line);
+           border-radius: 8px; padding: 1rem 1.1rem; margin-bottom: 1.25rem; }
+  .panel h3 { margin: 0 0 .2rem; font-size: .95rem; }
+  .panel .hint { color: var(--muted); font-size: .85rem; margin: 0 0 .8rem; }
+  .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: .25rem; }
+  .field label { font-size: .75rem; color: var(--muted);
+                 text-transform: uppercase; letter-spacing: .05em; }
+  .checks { display: flex; gap: .75rem; flex-wrap: wrap; margin: .1rem 0 0; }
+  .checks label { display: flex; gap: .3rem; align-items: center;
+                  font-size: .85rem; text-transform: none; letter-spacing: 0;
+                  color: var(--fg); }
+  /* The one-time secret. Deliberately loud: it is unrecoverable once dismissed. */
+  .secret { border: 1px solid var(--ok); border-radius: 8px; padding: .9rem 1rem;
+            margin-bottom: 1.25rem; }
+  .secret .value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                   font-size: 1rem; word-break: break-all; user-select: all;
+                   background: var(--bg); border: 1px solid var(--line);
+                   border-radius: 6px; padding: .6rem .7rem; margin: .5rem 0; }
 </style>
 </head>
 <body>
@@ -95,6 +118,25 @@
   <span style="margin-left:auto" class="muted mono">v{{ version }} · {{ environment }}</span>
 </header>
 <main>
+{% if flash %}
+  {% if flash.error %}<div class="banner bad">{{ flash.error }}</div>{% endif %}
+  {% if flash.ok %}<div class="banner ok">{{ flash.ok }}</div>{% endif %}
+  {#
+    Shown exactly once: the value lives in a one-shot server-side store that is
+    emptied on read, so a refresh will not bring it back. That is the whole
+    point -- only a SHA-256 hash is kept, and nothing can recover this later.
+  #}
+  {% if flash.secret %}
+  <div class="secret">
+    <strong>Copy this now — it cannot be shown again.</strong>
+    <div class="value">{{ flash.secret }}</div>
+    <div class="muted" style="font-size:.85rem">
+      {{ flash.secret_label }}. Only a SHA-256 hash is stored; refreshing this
+      page will not show it again.
+    </div>
+  </div>
+  {% endif %}
+{% endif %}
 {% block content %}{% endblock %}
 </main>
 </body>

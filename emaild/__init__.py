@@ -2,7 +2,7 @@
 
 import os
 
-__version__ = "0.10.0-rc.1"
+__version__ = "0.11.0-rc.1"
 
 # Build provenance (first_production_packaging §13, release_rules §2). Injected
 # by the Dockerfile from build args; "unknown" outside a container build. An

@@ -1,13 +1,34 @@
-"""Dashboard routes. Read-only, without exception.
+"""Dashboard routes.
 
-Every mutation lives in the admin CLI. A dashboard that can revoke keys or
-un-suppress addresses is one whose compromise matters far more than one that can
-only answer questions -- and the CLI is where those actions get a confirmation
-prompt and a log line anyway.
+Originally read-only, on the reasoning that a dashboard which can revoke keys
+matters far more when compromised than one that can only answer questions. That
+held right up until the first real user said the honest thing: a tool you have
+to relearn every time is a tool you do not use. Issuing a key for a new product
+is the single most frequent operation here, and routing it through a CLI meant
+looking up the CLI first.
+
+So mutations exist now, bounded by what this container is *able* to do rather
+than by what seems prudent:
+
+  here      projects, API keys, suppressions -- database only
+  CLI only  domains and mailboxes -- these need the MXRoute account-root
+            credential and the mailbox encryption key, and role=api holds
+            neither (emaild/config.py). The api container does not mount the
+            volume containing them, so this is enforced by Docker rather than
+            by intent.
+
+Which lands in the right place: the frequent, low-consequence operation is two
+clicks, and the rare one that can delete mailboxes or breach the provider's
+acceptable-use policy still requires deliberately reaching for another tool.
+
+Every mutation is a POST, CSRF-checked (emaild/dashboard/csrf.py -- necessary
+because HTTP Basic credentials are attached by the browser automatically), and
+logged with actor="dashboard" so the audit trail says where it came from.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,18 +41,36 @@ from sqlalchemy.orm import selectinload
 
 from emaild import __version__
 from emaild.config import get_settings
+from emaild.dashboard import csrf
 from emaild.dashboard.auth import check_dashboard_auth
+from emaild.dashboard.forms import many, one, parse_form, stash, take
 from emaild.db import session_scope
+from emaild.management import (
+    ManagementError,
+    create_api_key,
+    create_project,
+    revoke_api_key,
+)
 from emaild.metrics import build_overview
 from emaild.models import (
     ApiKey,
     Domain,
+    DomainStatus,
     Mailbox,
     Message,
     MessageStatus,
     Project,
 )
-from emaild.suppressions import count_suppressions, list_suppressions
+from emaild.suppressions import (
+    InvalidAddress,
+    SuppressionSource,
+    add_suppression,
+    count_suppressions,
+    list_suppressions,
+    remove_suppression,
+)
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(include_in_schema=False)
 
@@ -62,12 +101,46 @@ def _guard(request: Request) -> Response | None:
 
 def _base(request: Request, page: str) -> dict[str, Any]:
     settings = get_settings()
+    # `flash` is a one-shot payload left by a mutation that redirected here;
+    # `csrf_token` goes into every form on the page.
+    flash = take(request.query_params.get("f"))
     return {
         "request": request,
         "page": page,
         "version": __version__,
         "environment": settings.env.value,
+        "csrf_token": csrf.issue_token(settings),
+        "flash": flash,
     }
+
+
+async def _mutation_guard(request: Request) -> Response | None:
+    """Authentication and CSRF, in that order, for a state-changing request."""
+    if (refused := _guard(request)) is not None:
+        return refused
+    return None
+
+
+def _back(path: str, *, ok: str | None = None, error: str | None = None, **extra: Any) -> Response:
+    """Post/Redirect/Get. 303 so the browser reissues as GET.
+
+    Messages travel by one-shot handle rather than as query text: a plain
+    ?msg= is attacker-supplied content rendered on an authenticated page, and
+    while Jinja's autoescaping stops it becoming XSS, it would still let a
+    crafted link display a convincing lie inside the operator's own dashboard.
+    """
+    payload: dict[str, Any] = {"ok": ok, "error": error, **extra}
+    return RedirectResponse(f"{path}?f={stash(payload)}", status_code=303)
+
+
+async def _reject_bad_csrf(
+    request: Request, form: dict[str, list[str]], path: str
+) -> Response | None:
+    reason = csrf.verify(request, one(form, csrf._FIELD), get_settings())
+    if reason is None:
+        return None
+    log.warning("dashboard: rejected a mutation on %s (%s)", path, reason)
+    return _back(path, error=reason)
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -244,6 +317,28 @@ async def keys(request: Request) -> Response:
             m.id: m.address for m in (await session.execute(select(Mailbox))).scalars().all()
         }
 
+        projects = (
+            (await session.execute(select(Project).where(Project.active).order_by(Project.name)))
+            .scalars()
+            .all()
+        )
+        # Only READY domains can send, so a key scoped to anything else would
+        # authenticate and then fail at the first request. Offer what works.
+        sendable = (
+            (
+                await session.execute(
+                    select(Mailbox)
+                    .join(Domain, Mailbox.domain_id == Domain.id)
+                    .where(Mailbox.active, Domain.status == DomainStatus.READY)
+                    .order_by(Mailbox.address)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        project_names = [p.name for p in projects]
+        sender_addresses = [m.address for m in sendable]
+
     view = [
         {
             "name": k.name,
@@ -256,8 +351,78 @@ async def keys(request: Request) -> Response:
         for k, p in rows
     ]
     return templates.TemplateResponse(
-        request, "keys.html", {**_base(request, "keys"), "keys": view}
+        request,
+        "keys.html",
+        {
+            **_base(request, "keys"),
+            "keys": view,
+            "projects": project_names,
+            "senders": sender_addresses,
+        },
     )
+
+
+@router.post("/keys/create")
+async def keys_create(request: Request) -> Response:
+    if (refused := await _mutation_guard(request)) is not None:
+        return refused
+    form = await parse_form(request)
+    if (bad := await _reject_bad_csrf(request, form, "/keys")) is not None:
+        return bad
+
+    name = one(form, "name")
+    project = one(form, "project")
+    senders = many(form, "mailbox")
+
+    async with session_scope() as session:
+        try:
+            _, plaintext, scoped = await create_api_key(
+                session, name, project, senders, actor="dashboard"
+            )
+        except ManagementError as exc:
+            return _back("/keys", error=str(exc))
+
+    # The plaintext never touches the redirect URL -- see forms.stash.
+    return _back(
+        "/keys",
+        ok=f"Created key '{name}'.",
+        secret=plaintext,
+        secret_label=f"Scoped to {', '.join(scoped)}",
+    )
+
+
+@router.post("/keys/revoke")
+async def keys_revoke(request: Request) -> Response:
+    if (refused := await _mutation_guard(request)) is not None:
+        return refused
+    form = await parse_form(request)
+    if (bad := await _reject_bad_csrf(request, form, "/keys")) is not None:
+        return bad
+
+    name = one(form, "name")
+    async with session_scope() as session:
+        try:
+            message = await revoke_api_key(session, name, actor="dashboard")
+        except ManagementError as exc:
+            return _back("/keys", error=str(exc))
+    return _back("/keys", ok=message)
+
+
+@router.post("/projects/create")
+async def projects_create(request: Request) -> Response:
+    if (refused := await _mutation_guard(request)) is not None:
+        return refused
+    form = await parse_form(request)
+    if (bad := await _reject_bad_csrf(request, form, "/keys")) is not None:
+        return bad
+
+    name = one(form, "name")
+    async with session_scope() as session:
+        try:
+            await create_project(session, name, one(form, "description"), actor="dashboard")
+        except ManagementError as exc:
+            return _back("/keys", error=str(exc))
+    return _back("/keys", ok=f"Created project '{name}'.")
 
 
 @router.get("/suppressions", response_class=HTMLResponse)
@@ -283,3 +448,53 @@ async def suppressions(request: Request) -> Response:
         "suppressions.html",
         {**_base(request, "suppressions"), "suppressions": view, "total": total},
     )
+
+
+@router.post("/suppressions/add")
+async def suppressions_add(request: Request) -> Response:
+    if (refused := await _mutation_guard(request)) is not None:
+        return refused
+    form = await parse_form(request)
+    if (bad := await _reject_bad_csrf(request, form, "/suppressions")) is not None:
+        return bad
+
+    address = one(form, "address")
+    async with session_scope() as session:
+        try:
+            _, created = await add_suppression(
+                session,
+                address,
+                source=SuppressionSource.MANUAL,
+                reason=one(form, "reason") or "added from the dashboard",
+            )
+        except InvalidAddress as exc:
+            return _back("/suppressions", error=str(exc))
+
+    log.info("suppression added from dashboard: %s (new=%s)", address, created)
+    return _back(
+        "/suppressions",
+        ok=(
+            f"Suppressed {address}."
+            if created
+            else f"{address} was already suppressed; nothing changed."
+        ),
+    )
+
+
+@router.post("/suppressions/remove")
+async def suppressions_remove(request: Request) -> Response:
+    """Un-suppress. This resumes mail to an address something distrusted."""
+    if (refused := await _mutation_guard(request)) is not None:
+        return refused
+    form = await parse_form(request)
+    if (bad := await _reject_bad_csrf(request, form, "/suppressions")) is not None:
+        return bad
+
+    address = one(form, "address")
+    async with session_scope() as session:
+        removed = await remove_suppression(session, address)
+
+    if not removed:
+        return _back("/suppressions", error=f"{address} is not on the suppression list.")
+    log.warning("suppression removed from dashboard: %s", address)
+    return _back("/suppressions", ok=f"Resumed sending to {address}.")

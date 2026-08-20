@@ -2,9 +2,78 @@
 {% block title %}emaild — keys{% endblock %}
 {% block content %}
 <h1>API keys</h1>
+
+{#
+  The reason the dashboard has mutations at all: this is the flow you run every
+  time a new product needs to send mail. Domains and mailboxes stay in the CLI
+  because the api container holds neither the MXRoute credential nor the
+  encryption key they require.
+#}
+<div class="panel">
+  <h3>New key</h3>
+  <p class="hint">Shown once at creation and never recoverable.</p>
+  {% if not projects %}
+    <p class="muted">Create a project first.</p>
+  {% elif not senders %}
+    <p class="muted">
+      No sender identities are available. A key can only be scoped to a mailbox
+      on a <strong>ready</strong> domain — provision one with
+      <code>appctl admin mailboxes provision you@yourdomain.com</code>.
+    </p>
+  {% else %}
+  <form method="post" action="/keys/create">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="row">
+      <div class="field">
+        <label for="k-name">Name</label>
+        <input id="k-name" name="name" required maxlength="64" placeholder="billing-prod">
+      </div>
+      <div class="field">
+        <label for="k-project">Project</label>
+        <select id="k-project" name="project">
+          {% for p in projects %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="primary">Create key</button>
+    </div>
+    <div class="field" style="margin-top:.7rem">
+      <label>Send as</label>
+      <div class="checks">
+        {% for s in senders %}
+        <label>
+          <input type="checkbox" name="mailbox" value="{{ s }}"
+                 {% if senders|length == 1 %}checked{% endif %}>
+          <span class="mono">{{ s }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+  </form>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h3>New project</h3>
+  <p class="hint">A grouping for keys — usually one per application.</p>
+  <form method="post" action="/projects/create">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="row">
+      <div class="field">
+        <label for="p-name">Name</label>
+        <input id="p-name" name="name" required maxlength="64" placeholder="billing">
+      </div>
+      <div class="field">
+        <label for="p-desc">Description</label>
+        <input id="p-desc" name="description" placeholder="optional">
+      </div>
+      <button type="submit">Create project</button>
+    </div>
+  </form>
+</div>
+
 {% if not keys %}<div class="empty">No keys issued.</div>{% else %}
 <table>
-  <tr><th>Name</th><th>Project</th><th>Prefix</th><th>State</th><th>Last used</th><th>Sender scope</th></tr>
+  <tr><th>Name</th><th>Project</th><th>Prefix</th><th>State</th><th>Last used</th><th>Sender scope</th><th></th></tr>
   {% for k in keys %}
   <tr>
     <td>{{ k.name }}</td>
@@ -13,13 +82,23 @@
     <td><span class="pill {{ 'ok' if k.state == 'active' else 'bad' }}">{{ k.state }}</span></td>
     <td class="muted">{{ k.last_used or 'never' }}</td>
     <td class="mono">{{ k.scopes|join(', ') or '—' }}</td>
+    <td>
+      {% if k.state == 'active' %}
+      <form method="post" action="/keys/revoke"
+            onsubmit="return confirm('Revoke {{ k.name }}? Anything using this key stops sending immediately.')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="name" value="{{ k.name }}">
+        <button type="submit" class="link">revoke</button>
+      </form>
+      {% endif %}
+    </td>
   </tr>
   {% endfor %}
 </table>
 <p class="muted" style="font-size:.85rem">
-  Only a SHA-256 hash is stored — a key is shown once, at creation, and is never recoverable.
-  Revoke with <code>python -m emaild.admin keys revoke &lt;name&gt;</code>; it takes effect
-  on the next request, because authentication is never cached.
+  Only a SHA-256 hash is stored — a key is shown once, at creation, and is never
+  recoverable. Revocation takes effect on the next request, because
+  authentication is never cached.
 </p>
 {% endif %}
 {% endblock %}
