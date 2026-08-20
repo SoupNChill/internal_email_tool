@@ -44,6 +44,7 @@ from emaild.config import get_settings
 from emaild.dashboard import csrf
 from emaild.dashboard.auth import check_dashboard_auth
 from emaild.dashboard.forms import many, one, parse_form, stash, take
+from emaild.dashboard.setup_state import next_step
 from emaild.db import session_scope
 from emaild.management import (
     ManagementError,
@@ -150,11 +151,164 @@ async def overview(request: Request) -> Response:
     settings = get_settings()
     async with session_scope() as session:
         o = await build_overview(session, safety_margin=settings.rate_limit_safety_margin)
+        step = await next_step(session, _base_url(request))
     # Overview and QueueHealth are dataclasses, so the template can read them
     # directly -- no view-model wrapper needed.
     return templates.TemplateResponse(
-        request, "overview.html", {**_base(request, "overview"), "o": o}
+        request, "overview.html", {**_base(request, "overview"), "o": o, "step": step}
     )
+
+
+@router.get("/integrate", response_class=HTMLResponse)
+async def integrate(request: Request) -> Response:
+    """The integration brief, filled in with this installation's real values.
+
+    Exists because the generic version lives in a file on GitHub, and handing a
+    coding assistant a document full of {BASE_URL} placeholders means editing
+    them by hand first -- which is exactly the friction this page removes.
+    """
+    if (refused := _guard(request)) is not None:
+        return refused
+
+    base_url = _base_url(request)
+    async with session_scope() as session:
+        senders = (
+            (
+                await session.execute(
+                    select(Mailbox.address)
+                    .join(Domain, Mailbox.domain_id == Domain.id)
+                    .where(Mailbox.active, Domain.status == DomainStatus.READY)
+                    .order_by(Mailbox.address)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "integrate.html",
+        {
+            **_base(request, "integrate"),
+            "base_url": base_url,
+            "senders": list(senders),
+            "brief": _integration_brief(base_url, list(senders)),
+        },
+    )
+
+
+def _base_url(request: Request) -> str:
+    """The URL an application on another machine should call.
+
+    Taken from the Host header rather than configured: this is served on a LAN
+    by IP, behind a Cloudflare tunnel by hostname, and on localhost in
+    development, and the operator should not have to tell it which. Falls back
+    to the request URL when Host is absent.
+    """
+    host = request.headers.get("host")
+    if not host:
+        return str(request.base_url).rstrip("/")
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    return f"{scheme}://{host}"
+
+
+def _integration_brief(base_url: str, senders: list[str]) -> str:
+    """A paste-ready instruction for a coding assistant.
+
+    Deliberately written as prose addressed to the assistant rather than as
+    reference documentation. The failure mode being avoided is an assistant
+    that reads a spec, recognises it as Resend-shaped, and then confidently
+    polls for a `delivered` status this API will never return -- so that is
+    stated as a rule, near the top, not left as a footnote in a status table.
+    """
+    sender = senders[0] if senders else "noreply@yourdomain.com"
+    return f"""We send transactional email through a self-hosted service called emaild.
+
+It is wire-compatible with Resend, so use the Resend REST shape you already
+know, with these differences:
+
+  Base URL:  {base_url}
+  Endpoint:  POST {base_url}/v1/emails
+  Auth:      Authorization: Bearer <the key I will give you>
+  From:      must be exactly one of: {", ".join(senders) or sender}
+
+Request body:
+  {{
+    "from": "{sender}",
+    "to": "customer@example.com",
+    "subject": "Verify your email",
+    "html": "<p>Click to verify.</p>",
+    "text": "Click to verify."
+  }}
+
+  `to`, `cc`, `bcc` accept a string or an array. Send both `html` and `text`
+  when you can -- HTML-only scores worse with spam filters. Unknown fields are
+  rejected rather than ignored.
+
+Response is 202 with:
+  {{ "id": "email_01...", "status": "queued" }}
+
+IMPORTANT -- statuses differ from Resend:
+
+  queued                 stored durably, NOT yet sent
+  sending                a worker is delivering it now
+  accepted_by_provider   TERMINAL. The mail provider took custody and
+                         answered 250. It does NOT mean delivered.
+  temporarily_failed     will be retried automatically
+  permanently_rejected   will not be retried
+
+  There is NO `delivered` status and there never will be -- this provider
+  cannot prove delivery, so the API does not claim it. Do not poll waiting for
+  one. Treat accepted_by_provider as success.
+
+Retries and idempotency:
+  Send an `Idempotency-Key` header on anything you might retry. The same key
+  with the same body returns the original response; the same key with a
+  different body is rejected. Do not implement your own send-retry loop --
+  emaild owns delivery retries.
+
+Errors are JSON: {{ "error": {{ "type": ..., "message": ..., "param": ... }} }}
+  authentication_error   key missing, malformed, or revoked
+  authorization_error    the key may not send as that `from`
+  domain_not_ready       the sending domain's DNS is incomplete
+  validation_error       `param` names the bad field
+  suppressed_recipient   that address is on the suppression list
+
+Rate limit: 400 messages per hour per sender address. emaild holds messages
+back rather than letting them fail, so a 202 does not mean it left immediately.
+
+Check one message: GET {base_url}/v1/emails/{{id}} -- returns status and a
+timeline. It never returns the body, by design.
+"""
+
+
+def _check_for_record(record: dict) -> str | None:
+    """Which DNS check corresponds to a required record.
+
+    Lets each row show its own pass/fail instead of a bag of pills at the top
+    of the page, which never said WHICH record was the broken one -- the
+    question an operator staring at a registrar actually has.
+
+    Matched on shape rather than order, because the provider decides how many
+    MX records to return and in what sequence.
+    """
+    rtype = str(record.get("type", "")).upper()
+    name = str(record.get("name", "")).lower()
+    value = str(record.get("value", ""))
+
+    if rtype == "MX":
+        return "mx"
+    if rtype != "TXT":
+        return None
+    if "_domainkey" in name:
+        return "dkim"
+    if name.startswith("_dmarc"):
+        return "dmarc"
+    if name.startswith("_da-verify") or "domain-verified" in value:
+        return "ownership"
+    if value.startswith("v=spf1"):
+        return "spf"
+    return None
 
 
 @router.get("/domains", response_class=HTMLResponse)
@@ -174,6 +328,13 @@ async def domains(request: Request) -> Response:
                 checks[name] = result
                 if result != "pass" and name != "dmarc":
                     missing.append(name)
+
+        records = [
+            {**r, "check": _check_for_record(r), "result": checks.get(_check_for_record(r) or "")}
+            for r in (d.required_records or [])
+            if isinstance(r, dict)
+        ]
+
         view.append(
             {
                 "name": d.name,
@@ -182,6 +343,7 @@ async def domains(request: Request) -> Response:
                 "checked": _fmt(d.dns_checked_at),
                 "checks": checks,
                 "missing": missing,
+                "records": records,
             }
         )
     return templates.TemplateResponse(

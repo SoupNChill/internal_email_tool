@@ -96,9 +96,7 @@ async def test_blocking_remains_account_wide(session):
     """The point of the design. Visibility is scoped; enforcement is not --
     reputation is shared across every domain on the account."""
     alpha, beta = await _two_projects(session)
-    await add_suppression(
-        session, "dead@x.com", source=SuppressionSource.BOUNCE, project_id=alpha
-    )
+    await add_suppression(session, "dead@x.com", source=SuppressionSource.BOUNCE, project_id=alpha)
 
     # beta cannot SEE it...
     assert [s.address for s in await list_suppressions(session, project_id=beta)] == []

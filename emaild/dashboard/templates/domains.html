@@ -2,34 +2,99 @@
 {% block title %}emaild — domains{% endblock %}
 {% block content %}
 <h1>Domains</h1>
+
 {% if not domains %}
-<div class="empty">No domains tracked. Add one with <code>python -m emaild.admin domains add &lt;name&gt;</code></div>
+<div class="panel">
+  <h3>No domains yet</h3>
+  <p class="hint">
+    A domain is the part after the <code>@</code> in the address you send from.
+    It has to be added on the server, because adding one needs the MXRoute
+    account credential that this dashboard is deliberately not given.
+  </p>
+  <div class="value mono">appctl admin domains add yourdomain.com</div>
+</div>
 {% else %}
-<table>
-  <tr><th>Domain</th><th>Status</th><th>DNS checks</th><th>SMTP host</th><th>Last checked</th></tr>
-  {% for d in domains %}
-  <tr>
-    <td class="mono">{{ d.name }}</td>
-    <td><span class="pill {{ 'ok' if d.status == 'ready' else ('bad' if d.status in ('misconfigured','suspended') else 'warn') }}">{{ d.status }}</span></td>
-    <td>
-      {% if d.checks %}
-        {% for name, result in d.checks.items() %}
-          <span class="pill {{ 'ok' if result == 'pass' else ('warn' if name == 'dmarc' else 'bad') }}">{{ name }}</span>
-        {% endfor %}
-      {% else %}<span class="muted">never verified</span>{% endif %}
-    </td>
-    <td class="mono muted">{{ d.smtp_host or '—' }}</td>
-    <td class="muted">{{ d.checked or 'never' }}</td>
-  </tr>
+
+{% for d in domains %}
+<div class="panel">
+  <div class="row" style="justify-content:space-between">
+    <div>
+      <h3 class="mono">{{ d.name }}</h3>
+      <p class="hint" style="margin:0">
+        <span class="pill {{ 'ok' if d.status == 'ready' else ('bad' if d.status in ('misconfigured','suspended') else 'warn') }}">{{ d.status }}</span>
+        {% if d.status == 'ready' %}can send{% endif %}
+        {% if d.status == 'verified' %}DNS is complete — needs a sender identity{% endif %}
+        {% if d.status == 'dns_incomplete' %}publish the records below{% endif %}
+        {% if d.status == 'added' %}publish the records below, then verify{% endif %}
+        {% if d.status == 'misconfigured' %}was working; DNS changed outside emaild{% endif %}
+        <span class="muted"> · checked {{ d.checked or 'never' }}</span>
+      </p>
+    </div>
+  </div>
+
   {% if d.missing %}
-  <tr><td colspan="5" style="padding-top:0">
-    <span class="muted">Not resolving:</span>
-    {% for m in d.missing %}<code>{{ m }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
-    <span class="muted"> — run <code>python -m emaild.admin domains records {{ d.name }}</code> for the exact records.</span>
-  </td></tr>
+  {#
+    Stated independently of the record table below. A domain added before
+    required_records was captured has no table, and the failing checks are the
+    only thing that tells the operator where to look.
+  #}
+  <p class="hint" style="margin-top:.6rem">
+    <span class="pill bad">not resolving</span>
+    {% for m in d.missing %}<code>{{ m }}</code>{% if not loop.last %} {% endif %}{% endfor %}
+  </p>
+  {% elif d.checks %}
+  <p class="hint" style="margin-top:.6rem">
+    {% for name, result in d.checks.items() %}
+      <span class="pill {{ 'ok' if result == 'pass' else ('warn' if name == 'dmarc' else 'bad') }}">{{ name }}</span>
+    {% endfor %}
+  </p>
   {% endif %}
-  {% endfor %}
-</table>
+
+  {% if d.records %}
+  <h2 style="margin-top:1.2rem">DNS records to publish</h2>
+  <p class="hint">
+    Paste each value <strong>without surrounding quotes</strong> — most registrars add
+    their own, and a double-quoted DKIM key resolves fine while failing verification.
+  </p>
+  <table>
+    <tr><th>Type</th><th>Name</th><th>Value</th><th>Status</th></tr>
+    {% for r in d.records %}
+    <tr>
+      <td class="mono">{{ r.type }}{% if r.priority %} <span class="muted">({{ r.priority }})</span>{% endif %}</td>
+      <td class="mono">{{ r.name }}</td>
+      {# user-select:all so one click selects the whole value -- DKIM keys are
+         392 characters and dragging across one is how they get truncated #}
+      <td class="mono" style="word-break:break-all;user-select:all;max-width:32rem">{{ r.value }}</td>
+      <td>
+        {#
+          `result` is absent until the domain has been verified at least once.
+          Testing only `check` rendered the literal string "None" in that
+          column -- accurate to the data and meaningless to a reader.
+        #}
+        {% if r.result %}
+          <span class="pill {{ 'ok' if r.result == 'pass' else ('warn' if r.check == 'dmarc' else 'bad') }}">
+            {{ 'ok' if r.result == 'pass' else r.result }}
+          </span>
+        {% elif r.check %}
+          <span class="muted">not checked</span>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="hint" style="margin-top:.8rem">
+    Published them already? DNS takes 5–15 minutes to propagate, then re-check:
+    <code>appctl admin domains verify {{ d.name }}</code>
+  </p>
+  {% elif d.checks %}
+  <p class="hint">
+    Records were not captured for this domain. Run
+    <code>appctl admin domains verify {{ d.name }}</code> to fetch them.
+  </p>
+  {% endif %}
+</div>
+{% endfor %}
+
 <p class="muted" style="font-size:.85rem">
   Only <strong>ready</strong> domains may send. DMARC is reported but does not block —
   it is a policy statement, not an authentication mechanism.

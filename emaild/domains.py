@@ -114,6 +114,11 @@ async def refresh_domain(
     if mx_records:
         domain.smtp_host = mx_records[0].get("hostname")
 
+    # Refreshed on every verify, so a provider-side change (a rotated DKIM key)
+    # reaches the dashboard rather than leaving a stale record on screen that
+    # the operator dutifully re-publishes.
+    domain.required_records = required_dns_records(domain_name, dns_info)
+
     verification = dns_info.get("verification") or {}
     if verification.get("name"):
         domain.verification_token = verification["name"]
@@ -162,6 +167,20 @@ async def add_domain(
             log.info("domain %s already existed at provider; adopting", domain_name)
 
     domain = Domain(name=domain_name, status=DomainStatus.ADDED)
+
+    # Capture the records now, while we still hold a provider client. The
+    # dashboard has to display these and can never fetch them itself: doing so
+    # needs the MXRoute account-root credential, which role=api is not given.
+    # A failure here must not fail the add -- the domain is registered either
+    # way, and `domains verify` refreshes this.
+    try:
+        dns_info = await client.get_dns(domain_name)
+        domain.required_records = required_dns_records(domain_name, dns_info)
+        mx = (dns_info.get("mx_records") or [{}])[0]
+        domain.smtp_host = mx.get("hostname")
+    except MXRouteError as exc:
+        log.warning("could not capture DNS records for %s: %s", domain_name, exc)
+
     session.add(domain)
     await session.flush()
     return domain

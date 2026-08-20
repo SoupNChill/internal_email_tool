@@ -3,6 +3,21 @@
 {% block content %}
 <h1>Is email healthy?</h1>
 
+{#
+  The one next action. Deliberately a single step rather than a checklist:
+  five things to do is the same problem as no guidance at all.
+#}
+<div class="panel" style="border-color: {{ 'var(--ok)' if step.done else 'var(--accent)' }}">
+  <h3>{% if step.done %}✓ {% endif %}{{ step.title }}</h3>
+  <p class="hint">{{ step.why }}</p>
+  {% if step.command %}
+  <div class="value mono" style="user-select:all;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:.55rem .7rem;font-size:.9rem">{{ step.command }}</div>
+  {% endif %}
+  {% if step.href %}
+  <p style="margin:.7rem 0 0"><a href="{{ step.href }}">{{ step.link_label }} →</a></p>
+  {% endif %}
+</div>
+
 <div class="banner {{ 'ok' if o.queue.healthy else 'bad' }}">
   {% if o.queue.healthy %}
     Healthy. {{ o.queue.pending }} pending, nothing flagged for review.

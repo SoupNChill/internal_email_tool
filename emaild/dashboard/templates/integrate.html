@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}emaild — integrate{% endblock %}
+{% block content %}
+<h1>Give this to your coding assistant</h1>
+<p class="muted" style="font-size:.9rem;margin-top:-.5rem">
+  Filled in with this installation's real values. Select the box and copy — it is
+  written as an instruction, so it can be pasted straight into an AI coder.
+</p>
+
+{% if not senders %}
+<div class="banner bad">
+  No sender identities exist yet, so the brief below has no address to send from.
+  Finish setup first — see the <a href="/">overview</a>.
+</div>
+{% endif %}
+
+{#
+  user-select:all makes one click select the whole block. No JavaScript
+  clipboard button: the dashboard ships no JS, and a copy button that silently
+  fails without HTTPS -- which is exactly how this is served on a LAN -- is
+  worse than no button.
+#}
+<div class="panel">
+  <div class="value mono" style="user-select:all;white-space:pre-wrap;line-height:1.45">{{ brief }}</div>
+</div>
+
+<h2>What your application needs</h2>
+<table>
+  <tr><th>Setting</th><th>Value</th></tr>
+  <tr>
+    <td>Base URL</td>
+    <td class="mono" style="user-select:all">{{ base_url }}</td>
+  </tr>
+  <tr>
+    <td>Send endpoint</td>
+    <td class="mono" style="user-select:all">POST {{ base_url }}/v1/emails</td>
+  </tr>
+  <tr>
+    <td>Auth header</td>
+    <td class="mono">Authorization: Bearer &lt;your key&gt;</td>
+  </tr>
+  <tr>
+    <td>From address</td>
+    <td class="mono" style="user-select:all">{{ senders|join(', ') or '— none yet —' }}</td>
+  </tr>
+</table>
+
+<h2>A key, and where it may send from</h2>
+<p class="muted" style="font-size:.9rem">
+  A <strong>key</strong> is the password one application uses. It is restricted to the
+  sender addresses you tick when creating it, so a leaked key can send as those and
+  nothing else — it cannot read your mail bodies, touch another project's messages,
+  or change any settings. <a href="/keys">Create one</a>.
+</p>
+
+<h2>Why the AI already knows this API</h2>
+<p class="muted" style="font-size:.9rem">
+  emaild is wire-compatible with <a href="https://resend.com">Resend</a>, which
+  assistants have been trained on. Telling it "this is a Resend-compatible API at
+  {{ base_url }}" is usually enough on its own; the brief above just removes the
+  guesswork about which fields exist.
+</p>
+
+<h2>The one thing it will get wrong</h2>
+<p class="muted" style="font-size:.9rem">
+  Resend reports <code>delivered</code>. emaild never does, because on this provider
+  it cannot be proven — <code>accepted_by_provider</code> is terminal and means the
+  provider took custody, not that anything arrived. An assistant that polls for
+  <code>delivered</code> will wait forever. That is stated in the brief.
+</p>
+{% endblock %}
