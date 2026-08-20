@@ -100,6 +100,7 @@ async def add_suppression(
     *,
     source: SuppressionSource = SuppressionSource.MANUAL,
     reason: str | None = None,
+    project_id: int | None = None,
 ) -> tuple[Suppression, bool]:
     """Suppress an address. Returns (record, created).
 
@@ -115,7 +116,7 @@ async def add_suppression(
     if existing is not None:
         return existing, False
 
-    record = Suppression(address=normalised, source=source, reason=reason)
+    record = Suppression(address=normalised, source=source, reason=reason, project_id=project_id)
     session.add(record)
     try:
         await session.flush()
@@ -143,21 +144,31 @@ async def remove_suppression(session: AsyncSession, address: str) -> bool:
 
 
 async def list_suppressions(
-    session: AsyncSession, *, limit: int = 100, offset: int = 0
+    session: AsyncSession,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    project_id: int | None = None,
 ) -> list[Suppression]:
+    """Suppressed addresses, optionally narrowed to one project.
+
+    `project_id=None` means the OPERATOR view -- everything. Callers reachable
+    by an API key must always pass one: without it, this endpoint let any key
+    enumerate every suppressed address on the installation, including other
+    products' bounced customers. See emaild/api/v1.py.
+    """
+    stmt = select(Suppression).order_by(Suppression.created_at.desc())
+    if project_id is not None:
+        stmt = stmt.where(Suppression.project_id == project_id)
     return list(
-        (
-            await session.execute(
-                select(Suppression)
-                .order_by(Suppression.created_at.desc())
-                .limit(min(limit, 1000))
-                .offset(offset)
-            )
-        )
-        .scalars()
-        .all()
+        (await session.execute(stmt.limit(min(limit, 1000)).offset(offset))).scalars().all()
     )
 
 
-async def count_suppressions(session: AsyncSession) -> int:
-    return (await session.execute(select(func.count(Suppression.id)))).scalar_one()
+async def count_suppressions(session: AsyncSession, *, project_id: int | None = None) -> int:
+    """Total. Must be scoped the same way as the listing it accompanies --
+    a scoped list beside a global count still discloses the global total."""
+    stmt = select(func.count(Suppression.id))
+    if project_id is not None:
+        stmt = stmt.where(Suppression.project_id == project_id)
+    return (await session.execute(stmt)).scalar_one()

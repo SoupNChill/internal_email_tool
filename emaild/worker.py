@@ -351,6 +351,11 @@ class Worker:
                     address,
                     source=SuppressionSource.BOUNCE,
                     reason=suppression_reason(code, text),
+                    # Attribution only -- the block itself is account-wide.
+                    # This is what lets the project that sent to a dead address
+                    # see it in its own listing, without disclosing it to every
+                    # other project on the installation.
+                    project_id=message.project_id,
                 )
             except InvalidAddress:
                 continue

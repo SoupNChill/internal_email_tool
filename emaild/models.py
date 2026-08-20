@@ -198,6 +198,17 @@ class Domain(Base):
     # the account is on chocobo today, but that is not a guarantee.
     smtp_host: Mapped[str | None] = mapped_column(String(253))
 
+    # The exact records to publish, as returned by the provider and captured at
+    # add/verify time. Persisted so the dashboard can show them: fetching them
+    # live needs the MXRoute account-root credential, which role=api is never
+    # given, and "what do I paste into my registrar" is the single most
+    # asked-for thing on this screen.
+    #
+    # A snapshot, not a source of truth -- `domains verify` refreshes it. The
+    # DKIM public key is the part that matters, and it is not secret: it is
+    # published in DNS by definition.
+    required_records: Mapped[list | None] = mapped_column(JSONB)
+
     # Cached DNS verification. Swept on a schedule, never checked on the send
     # path -- the control API allows only 100 reads/minute account-wide.
     dns_state: Mapped[dict | None] = mapped_column(JSONB)
@@ -486,9 +497,32 @@ class Suppression(Base):
         nullable=False,
     )
     reason: Mapped[str | None] = mapped_column(Text)
+
+    # Which project's sending produced this entry. Records origin only --
+    # ENFORCEMENT stays account-wide, because an address that hard-bounced
+    # should not be mailed by anyone here: reputation is shared across every
+    # domain on the account, so letting one product keep mailing a dead address
+    # damages delivery for the others.
+    #
+    # It exists so the API listing can be scoped. Without it, GET
+    # /v1/suppressions returned every suppressed address on the installation,
+    # which let one product enumerate another product's bounced customers.
+    #
+    # NULL means "before this column existed, or added by the operator", and
+    # those stay visible only to the operator.
+    project_id: Mapped[int | None] = mapped_column(
+        # Named explicitly: an unnamed constraint gets a server-generated name,
+        # which a downgrade cannot then reference.
+        ForeignKey("projects.id", ondelete="SET NULL", name="fk_suppressions_project"),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = _now_col()
 
-    __table_args__ = (Index("ix_suppressions_address", "address"),)
+    __table_args__ = (
+        Index("ix_suppressions_address", "address"),
+        Index("ix_suppressions_project", "project_id"),
+    )
 
 
 class IdempotencyKey(Base):
@@ -580,3 +614,76 @@ class SendCounter(Base):
         UniqueConstraint("mailbox_id", "window_start", name="uq_counter_mailbox_window"),
         Index("ix_send_counters_lookup", "mailbox_id", "window_start"),
     )
+
+
+class JobType(str, enum.Enum):
+    """The CLOSED set of privileged actions the dashboard may request.
+
+    This enum is the security boundary. The API container cannot talk to
+    MXRoute -- it holds no credential and mounts no volume containing one -- so
+    it asks for work instead. What keeps that from being equivalent to handing
+    over the credential is that it can only ask for these, and nothing here
+    destroys anything.
+
+    Deliberately absent, and to stay absent: deleting a domain, deleting a
+    mailbox, provisioning a mailbox, rotating a password, or anything touching
+    reseller users. Provisioning in particular can breach MXRoute's
+    acceptable-use policy, which is a judgement call that belongs to a person
+    at a terminal.
+    """
+
+    ADD_DOMAIN = "add_domain"
+    VERIFY_DOMAIN = "verify_domain"
+
+
+class JobStatus(str, enum.Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class ProvisioningJob(Base):
+    """A privileged action requested by an unprivileged process.
+
+    The dashboard writes rows here; the provisioner (role=admin, no listener,
+    no published port) executes them. Compromising the internet-facing API
+    therefore yields the ability to add a domain, not the ability to delete
+    every mailbox on the account.
+
+    Claimed with the same FOR UPDATE SKIP LOCKED plus stale-claim reaper the
+    message queue uses, so a provisioner killed mid-job does not strand work.
+    """
+
+    __tablename__ = "provisioning_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_type: Mapped[JobType] = mapped_column(
+        _pg_enum(JobType, "job_type"),
+        nullable=False,
+    )
+    status: Mapped[JobStatus] = mapped_column(
+        _pg_enum(JobStatus, "job_status"),
+        default=JobStatus.PENDING,
+        server_default=text("'pending'"),
+        nullable=False,
+    )
+
+    # Job-type-specific arguments, validated at execution rather than trusted.
+    payload: Mapped[dict | None] = mapped_column(JSONB)
+
+    # Who asked. "dashboard" or "cli" -- kept so the audit trail survives even
+    # when the job itself has been pruned from the UI.
+    requested_by: Mapped[str] = mapped_column(
+        String(40), default="dashboard", server_default=text("'dashboard'"), nullable=False
+    )
+
+    # Written on both success and failure, and shown to whoever asked. This is
+    # the only feedback channel a queued action has.
+    result: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = _now_col()
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (Index("ix_jobs_claimable", "status", "created_at"),)

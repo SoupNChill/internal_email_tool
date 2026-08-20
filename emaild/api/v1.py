@@ -159,8 +159,14 @@ async def get_suppressions(
     principal: AuthedPrincipal, limit: int = 100, offset: int = 0
 ) -> SuppressionListView:
     async with session_scope() as session:
-        rows = await list_suppressions(session, limit=limit, offset=offset)
-        total = await count_suppressions(session)
+        # Scoped to the caller. Unscoped, this returned every suppressed
+        # address on the installation, so one product's key could enumerate
+        # another product's bounced customers -- real addresses of real people
+        # who have no relationship with the caller.
+        rows = await list_suppressions(
+            session, limit=limit, offset=offset, project_id=principal.project_id
+        )
+        total = await count_suppressions(session, project_id=principal.project_id)
     return SuppressionListView(
         total=total,
         data=[
@@ -187,6 +193,7 @@ async def create_suppression(
                 request.address,
                 source=SuppressionSource.MANUAL,
                 reason=request.reason or f"added via API by project {principal.project_name}",
+                project_id=principal.project_id,
             )
         except InvalidAddress as exc:
             raise ApiValidationError(str(exc), param="address") from None

@@ -431,8 +431,14 @@ async def suppressions(request: Request) -> Response:
         return refused
 
     async with session_scope() as session:
+        # No project_id: this is the OPERATOR view and deliberately shows every
+        # entry, unlike GET /v1/suppressions which is scoped to the calling
+        # project.
         rows = await list_suppressions(session, limit=200)
         total = await count_suppressions(session)
+        project_names = {
+            p.id: p.name for p in (await session.execute(select(Project))).scalars().all()
+        }
 
     view = [
         {
@@ -440,6 +446,9 @@ async def suppressions(request: Request) -> Response:
             "source": s.source.value,
             "reason": s.reason,
             "created": _fmt(s.created_at),
+            # None for operator-added entries and for anything predating the
+            # column -- rendered as a dash rather than guessed at.
+            "project": project_names.get(s.project_id) if s.project_id else None,
         }
         for s in rows
     ]

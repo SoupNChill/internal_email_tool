@@ -29,11 +29,12 @@
 
 {% if not suppressions %}<div class="empty">Nothing suppressed.</div>{% else %}
 <table>
-  <tr><th>Address</th><th>Source</th><th>Reason</th><th>Added</th><th></th></tr>
+  <tr><th>Address</th><th>Source</th><th>Project</th><th>Reason</th><th>Added</th><th></th></tr>
   {% for s in suppressions %}
   <tr>
     <td class="mono">{{ s.address }}</td>
     <td><span class="pill {{ 'warn' if s.source == 'bounce' else '' }}">{{ s.source }}</span></td>
+    <td class="muted">{{ s.project or '—' }}</td>
     <td class="muted">{{ s.reason or '—' }}</td>
     <td class="muted">{{ s.created }}</td>
     <td>
