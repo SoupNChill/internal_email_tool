@@ -28,7 +28,7 @@ name: emaild
 # operator has to create before anything will start. Pinning is preserved --
 # this is an exact version and `latest` is still never used -- but the pin now
 # travels with the artifact that needs it, which is also how you upgrade.
-x-image: &image "${EMAILD_IMAGE:-ghcr.io/soupnchill/emaild}:${EMAILD_VERSION:-0.11.0-rc.1}"
+x-image: &image "${EMAILD_IMAGE:-ghcr.io/soupnchill/emaild}:${EMAILD_VERSION:-0.12.0-rc.1}"
 
 services:
   postgres:
@@ -163,6 +163,41 @@ services:
       # worst possible moment to discover the mistake.
       - worker_secrets:/var/lib/emaild/secrets
     entrypoint: ["python", "-m", "emaild.admin"]
+
+  # Executes the domain jobs the dashboard queues. The ONLY long-running
+  # process holding the MXRoute account-root credential.
+  #
+  # It exists so the dashboard can add and verify domains without holding that
+  # credential itself. What bounds the risk is not this container being careful:
+  # the API can only write a JobType, and that enum has two members, both about
+  # domains and neither destructive. There is no way to express "delete a
+  # mailbox", so a compromised API cannot ask for one.
+  #
+  # Note what is ABSENT: no ports, and no worker_secrets mount. Domain work
+  # never decrypts a mailbox password, so this process cannot read one -- see
+  # the note on role=admin in emaild/config.py.
+  #
+  # Starts by default, and idles harmlessly when MXROUTE_* is unset rather than
+  # crash-looping or failing the queued work.
+  provisioner:
+    image: *image
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      EMAILD_ROLE: admin
+      EMAILD_ENV: production
+      EMAILD_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-emaild}:${POSTGRES_PASSWORD:-emaild}@postgres:5432/${POSTGRES_DB:-emaild}
+      EMAILD_LOG_LEVEL: ${EMAILD_LOG_LEVEL:-INFO}
+      EMAILD_MXROUTE_SERVER: ${EMAILD_MXROUTE_SERVER:-}
+      EMAILD_MXROUTE_USERNAME: ${EMAILD_MXROUTE_USERNAME:-}
+      EMAILD_MXROUTE_API_KEY: ${EMAILD_MXROUTE_API_KEY:-}
+      # Deliberately absent: MAILBOX_ENCRYPTION_KEY and EMAILD_SECRETS_DIR.
+    command: ["python", "-m", "emaild.provisioner"]
+    stop_grace_period: 30s
 
   # Opt-in. Gives HTTPS and a hostname reachable from outside the LAN --
   # necessary the day a product moves to a VPS, because it will not be able to

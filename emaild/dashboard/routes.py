@@ -46,6 +46,7 @@ from emaild.dashboard.auth import check_dashboard_auth
 from emaild.dashboard.forms import many, one, parse_form, stash, take
 from emaild.dashboard.setup_state import next_step
 from emaild.db import session_scope
+from emaild.jobs import JobError, enqueue, recent
 from emaild.management import (
     ManagementError,
     create_api_key,
@@ -57,6 +58,7 @@ from emaild.models import (
     ApiKey,
     Domain,
     DomainStatus,
+    JobType,
     Mailbox,
     Message,
     MessageStatus,
@@ -346,9 +348,75 @@ async def domains(request: Request) -> Response:
                 "records": records,
             }
         )
+    async with session_scope() as session:
+        jobs = [
+            {
+                "type": j.job_type.value.replace("_", " "),
+                "domain": (j.payload or {}).get("domain", "?"),
+                "status": j.status.value,
+                "result": j.result,
+                "created": _fmt(j.created_at),
+            }
+            for j in await recent(session, limit=8)
+        ]
+
     return templates.TemplateResponse(
-        request, "domains.html", {**_base(request, "domains"), "domains": view}
+        request,
+        "domains.html",
+        {**_base(request, "domains"), "domains": view, "jobs": jobs},
     )
+
+
+@router.post("/domains/add")
+async def domains_add(request: Request) -> Response:
+    """Queue a domain addition.
+
+    Does NOT perform it. This container has no MXRoute credential and will
+    never be given one; the provisioner picks the job up within a few seconds.
+    See emaild/jobs.py for why a queue is not just a slower way of granting
+    the same privilege.
+    """
+    if (refused := await _mutation_guard(request)) is not None:
+        return refused
+    form = await parse_form(request)
+    if (bad := await _reject_bad_csrf(request, form, "/domains")) is not None:
+        return bad
+
+    async with session_scope() as session:
+        try:
+            await enqueue(
+                session,
+                JobType.ADD_DOMAIN,
+                {"domain": one(form, "domain")},
+                requested_by="dashboard",
+            )
+        except JobError as exc:
+            return _back("/domains", error=str(exc))
+
+    return _back(
+        "/domains",
+        ok="Queued. It runs on the server within a few seconds — refresh to see the result.",
+    )
+
+
+@router.post("/domains/verify")
+async def domains_verify(request: Request) -> Response:
+    if (refused := await _mutation_guard(request)) is not None:
+        return refused
+    form = await parse_form(request)
+    if (bad := await _reject_bad_csrf(request, form, "/domains")) is not None:
+        return bad
+
+    domain = one(form, "domain")
+    async with session_scope() as session:
+        try:
+            await enqueue(
+                session, JobType.VERIFY_DOMAIN, {"domain": domain}, requested_by="dashboard"
+            )
+        except JobError as exc:
+            return _back("/domains", error=str(exc))
+
+    return _back("/domains", ok=f"Re-checking {domain} — refresh in a moment.")
 
 
 @router.get("/messages", response_class=HTMLResponse)

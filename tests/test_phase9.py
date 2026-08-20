@@ -161,12 +161,47 @@ def test_admin_role_no_longer_demands_mxroute_credentials_up_front():
     assert settings.mxroute_api_key is None
 
 
-def test_admin_role_still_requires_the_encryption_key():
-    """This one IS role-wide: admin handles mailbox credentials."""
+def test_admin_role_no_longer_requires_the_encryption_key_either():
+    """Changed deliberately, for the same reason as the MXRoute credentials
+    above: the demand sat on the ROLE rather than on the COMMAND.
+
+    Most admin work -- domains, keys, projects, suppressions -- never decrypts
+    anything. What this unlocks is the provisioner: role=admin, executes queued
+    domain jobs, and now runs WITHOUT mounting the volume holding the
+    encryption key. It never touches a mailbox password, so it should not be
+    able to read one.
+
+    The protection did not disappear; it moved to the point of use, which is
+    the next test."""
+    settings = _admin_settings(mailbox_encryption_key=None)
+    assert settings.role.value == "admin"
+    assert settings.mailbox_encryption_key is None
+
+
+def test_admin_commands_that_handle_credentials_still_refuse_without_the_key():
+    """Where the requirement went. Provisioning a mailbox genuinely cannot
+    proceed without the key, and says so."""
+    from emaild.admin import _cipher
+
+    with pytest.raises(RuntimeError, match="MAILBOX_ENCRYPTION_KEY"):
+        _cipher(_admin_settings(mailbox_encryption_key=None))
+
+
+def test_the_worker_still_requires_it_at_the_role_level():
+    """Unchanged, and correct: the worker decrypts on every single send, so one
+    without the key cannot do its job at all. Refusing at startup beats failing
+    every message."""
     from pydantic import ValidationError
 
+    from emaild.config import Settings
+
     with pytest.raises(ValidationError):
-        _admin_settings(mailbox_encryption_key=None)
+        Settings(
+            _env_file=None,
+            role="worker",
+            database_url=TEST_DSN or "postgresql+asyncpg://x/y",
+            mailbox_encryption_key=None,
+        )  # type: ignore[call-arg]
 
 
 async def test_commands_that_need_the_provider_fail_with_guidance():

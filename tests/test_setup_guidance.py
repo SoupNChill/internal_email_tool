@@ -67,7 +67,9 @@ async def _mailbox(session, domain: Domain) -> Mailbox:
 async def test_empty_installation_asks_for_a_domain(session):
     step = await next_step(session, BASE)
     assert "domain" in step.title.lower()
-    assert step.command and "domains add" in step.command
+    # In the browser now: the dashboard queues the job, the provisioner runs
+    # it. It used to hand over a CLI command.
+    assert step.href == "/domains"
     assert not step.done
 
 
@@ -148,13 +150,21 @@ async def test_a_revoked_key_does_not_count_as_having_one(session):
 
 @pytest.mark.parametrize(
     "status",
-    [DomainStatus.ADDED, DomainStatus.DNS_INCOMPLETE, DomainStatus.VERIFIED],
+    [DomainStatus.ADDED, DomainStatus.DNS_INCOMPLETE],
 )
-async def test_steps_that_need_the_server_carry_the_command(session, status):
-    """Domain and mailbox work cannot be done in the browser -- the api
-    container holds neither credential it would need. Saying so without giving
-    the command is where the friction was."""
+async def test_domain_steps_are_done_in_the_browser(session, status):
+    """Domain work is queued through the dashboard now, so these link rather
+    than hand over a command."""
     await _domain(session, status)
     step = await next_step(session, BASE)
-    assert step.command, f"{status.value} offers no command"
-    assert step.command.startswith("appctl admin")
+    assert step.href == "/domains"
+
+
+async def test_mailbox_provisioning_still_carries_a_command(session):
+    """The one step that genuinely cannot happen here: provisioning needs the
+    MXRoute credential AND the encryption key, and it can breach the provider's
+    acceptable-use policy, which is a judgement call for a person. Saying "do
+    it elsewhere" without saying how is where the friction was."""
+    await _domain(session, DomainStatus.VERIFIED)
+    step = await next_step(session, BASE)
+    assert step.command and step.command.startswith("appctl admin mailboxes provision")

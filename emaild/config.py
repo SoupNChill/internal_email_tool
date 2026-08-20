@@ -218,9 +218,25 @@ class Settings(BaseSettings):
         # The check now lives at the point of use, in emaild/admin.py, where it
         # can say which command needed them.
 
-        if self.role in (Role.WORKER, Role.ADMIN) and not self.mailbox_encryption_key:
+        # WORKER only. It decrypts a credential on every single send, so a
+        # worker without the key is a worker that cannot do its job at all --
+        # better to refuse at startup than to fail every message.
+        #
+        # role=admin is deliberately NOT included, for the same reason F-16
+        # removed the MXRoute requirement above: the demand sat on the ROLE
+        # rather than on the COMMAND. Most admin work -- domains, keys,
+        # projects, suppressions -- never decrypts anything, and emaild/admin.py
+        # already checks at the point of use, where it can say which command
+        # needed the key.
+        #
+        # What this unlocks: the provisioner (role=admin, executes queued
+        # domain jobs) can run WITHOUT mounting the volume that holds the
+        # encryption key. It never touches a mailbox password, so it should not
+        # be able to read one. Requiring it here would have forced the mount and
+        # handed a long-running container a secret it has no use for.
+        if self.role is Role.WORKER and not self.mailbox_encryption_key:
             raise ValueError(
-                f"role={self.role.value} requires EMAILD_MAILBOX_ENCRYPTION_KEY "
+                "role=worker requires EMAILD_MAILBOX_ENCRYPTION_KEY "
                 "to decrypt mailbox SMTP passwords"
             )
 

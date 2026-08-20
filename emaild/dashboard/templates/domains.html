@@ -3,16 +3,51 @@
 {% block content %}
 <h1>Domains</h1>
 
-{% if not domains %}
+{#
+  Adding a domain is QUEUED here, not performed. This container holds no
+  MXRoute credential; the provisioner does, and picks the job up in a few
+  seconds. See emaild/jobs.py.
+#}
 <div class="panel">
-  <h3>No domains yet</h3>
+  <h3>Add a domain</h3>
   <p class="hint">
     A domain is the part after the <code>@</code> in the address you send from.
-    It has to be added on the server, because adding one needs the MXRoute
-    account credential that this dashboard is deliberately not given.
+    Adding it registers it with MXRoute and fetches the DNS records to publish.
   </p>
-  <div class="value mono">appctl admin domains add yourdomain.com</div>
+  <form method="post" action="/domains/add">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="row">
+      <div class="field">
+        <label for="d-name">Domain</label>
+        <input id="d-name" name="domain" required placeholder="yourdomain.com"
+               style="min-width:18rem">
+      </div>
+      <button type="submit" class="primary">Add domain</button>
+    </div>
+  </form>
 </div>
+
+{% if jobs %}
+<div class="panel">
+  <h3>Recent domain jobs</h3>
+  <p class="hint">Queued here, executed on the server by the provisioner.</p>
+  <table>
+    <tr><th>Action</th><th>Domain</th><th>Status</th><th>Result</th><th>Queued</th></tr>
+    {% for j in jobs %}
+    <tr>
+      <td>{{ j.type }}</td>
+      <td class="mono">{{ j.domain }}</td>
+      <td><span class="pill {{ 'ok' if j.status == 'succeeded' else ('bad' if j.status == 'failed' else 'warn') }}">{{ j.status }}</span></td>
+      <td class="muted">{{ j.result or '—' }}</td>
+      <td class="muted">{{ j.created }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+{% if not domains %}
+<div class="empty">No domains tracked yet.</div>
 {% else %}
 
 {% for d in domains %}
@@ -82,15 +117,27 @@
     </tr>
     {% endfor %}
   </table>
-  <p class="hint" style="margin-top:.8rem">
-    Published them already? DNS takes 5–15 minutes to propagate, then re-check:
-    <code>appctl admin domains verify {{ d.name }}</code>
-  </p>
-  {% elif d.checks %}
-  <p class="hint">
-    Records were not captured for this domain. Run
-    <code>appctl admin domains verify {{ d.name }}</code> to fetch them.
-  </p>
+  <form method="post" action="/domains/verify" style="margin-top:.8rem">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="domain" value="{{ d.name }}">
+    <div class="row">
+      <button type="submit">Re-check DNS</button>
+      <span class="hint" style="margin:0">
+        Published them already? DNS takes 5–15 minutes to propagate.
+      </span>
+    </div>
+  </form>
+  {% else %}
+  <form method="post" action="/domains/verify" style="margin-top:.8rem">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="domain" value="{{ d.name }}">
+    <div class="row">
+      <button type="submit">Fetch DNS records</button>
+      <span class="hint" style="margin:0">
+        This domain has no records stored — it was added before they were kept.
+      </span>
+    </div>
+  </form>
   {% endif %}
 </div>
 {% endfor %}

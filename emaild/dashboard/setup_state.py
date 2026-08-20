@@ -14,6 +14,11 @@ other, and each step carries the plain-language reason it exists. There is
 exactly one, never a checklist: a list of five things to do is the same problem
 as no guidance at all.
 
+Steps that can be done here link to the page; steps that genuinely cannot --
+provisioning a mailbox needs the MXRoute credential AND the encryption key --
+carry the command instead. Saying "do this elsewhere" without saying how is
+where the friction was.
+
 Kept separate from routes.py because it is a decision, not a rendering, and a
 decision is worth testing on its own.
 """
@@ -52,11 +57,11 @@ async def next_step(session: AsyncSession, base_url: str) -> NextStep:
             title="Add a sending domain",
             why=(
                 "A domain is the part after the @ in the address you send from. "
-                "It has to be added on the server: registering one needs the "
-                "MXRoute account credential, which this dashboard is deliberately "
-                "never given."
+                "Adding it registers it with MXRoute and fetches the DNS records "
+                "you need to publish."
             ),
-            command="appctl admin domains add yourdomain.com",
+            href="/domains",
+            link_label="Add one",
         )
 
     ready = [d for d in domains if d.status is DomainStatus.READY]
@@ -79,7 +84,6 @@ async def next_step(session: AsyncSession, base_url: str) -> NextStep:
             ),
             href="/domains",
             link_label="See the exact records",
-            command=f"appctl admin domains verify {d.name}",
         )
 
     mailbox_count = (await session.execute(select(func.count(Mailbox.id)))).scalar_one()
@@ -106,7 +110,8 @@ async def next_step(session: AsyncSession, base_url: str) -> NextStep:
                 "The domain has a sender identity but is still marked verified "
                 "rather than ready. One re-check promotes it."
             ),
-            command=f"appctl admin domains verify {d.name}",
+            href="/domains",
+            link_label="Re-check it",
         )
 
     if mailbox_count == 0:

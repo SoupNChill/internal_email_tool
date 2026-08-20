@@ -1,7 +1,7 @@
 # emaild
 
 [![CI](https://github.com/SoupNChill/internal_email_tool/actions/workflows/ci.yml/badge.svg)](https://github.com/SoupNChill/internal_email_tool/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.11.0--rc.1-blue)](https://github.com/SoupNChill/internal_email_tool/releases)
+[![Release](https://img.shields.io/badge/release-v0.12.0--rc.1-blue)](https://github.com/SoupNChill/internal_email_tool/releases)
 [![Python](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/)
 
 **A self-hosted transactional email API.** One clean endpoint for every product
@@ -71,9 +71,10 @@ Bad external recipients are accepted at RCPT and bounce out of band, so
 - **Honest failure classification** — built from responses captured on a live
   server, not guessed
 - **Suppression list** — fed automatically by provider rejections
-- **Dashboard that does the daily work** — create projects and scoped API keys
-  in the browser; domain and mailbox provisioning stay in the CLI, because the
-  API container is not given the credentials they need
+- **Dashboard that does the daily work** — add domains, see the DNS records to
+  publish, create projects and scoped API keys, all in the browser. Privileged
+  actions are *queued* for a separate process rather than performed by the
+  internet-facing one, so the API never holds the account-root credential
 - **Backup and restore** — proven by destroying an installation and rebuilding it
 
 ---
@@ -223,7 +224,7 @@ the only workflow holding `packages: write`.
 
 ## Project status
 
-**v0.11.0-rc.1** — feature complete and packaged. The full lifecycle (install →
+**v0.12.0-rc.1** — feature complete and packaged. The full lifecycle (install →
 data → restart → container replacement → backup → destroy → restore → verify →
 send) has been demonstrated end to end on a clean installation.
 

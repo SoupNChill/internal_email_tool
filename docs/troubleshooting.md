@@ -53,7 +53,7 @@ Check without credentials:
 ```bash
 token=$(curl -fsSL "https://ghcr.io/token?scope=repository:soupnchill/emaild:pull&service=ghcr.io" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $token" \
-  https://ghcr.io/v2/soupnchill/emaild/manifests/0.11.0-rc.1
+  https://ghcr.io/v2/soupnchill/emaild/manifests/0.12.0-rc.1
 ```
 
 `200` means public. `403` means the package is still private — fix it at

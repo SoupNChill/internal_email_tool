@@ -117,7 +117,7 @@ recipient as nonexistent.
 | Page | Answers | Can change |
 |---|---|---|
 | `/` | Is email healthy? | — |
-| `/domains` | Which can send, and exactly which records are missing | — |
+| `/domains` | Which can send, the exact records to publish, per-record pass/fail | **add, re-check** |
 | `/messages` | Search by recipient, subject, or id; open one for its timeline | — |
 | `/keys` | What exists, scope, last used | **projects, API keys** |
 | `/suppressions` | Who we refuse to mail, and why | **add, remove** |
@@ -128,17 +128,38 @@ Log in with any username and the dashboard password:
 ./appctl key
 ```
 
-### Why domains and mailboxes are not here
+### How domains work without giving the dashboard the credential
 
-Not caution — capability. Adding a domain or provisioning a mailbox needs the
-MXRoute account-root credential and the mailbox encryption key, and the API
-container holds neither: it does not mount the volume they live in. So the
-dashboard *cannot* perform them, whatever a future change might prefer.
+Adding or verifying a domain calls MXRoute with an account-root key that can
+delete every mailbox on the account. The API container is never given it.
 
-That split follows how often each is needed. Issuing a key for a new product
-happens constantly and is two clicks. Provisioning a mailbox happens once per
-sender, can breach MXRoute's acceptable-use policy, and still requires
-deliberately reaching for `appctl admin`.
+So the dashboard does not perform those actions — it **queues** them. A row goes
+into `provisioning_jobs`, and the `provisioner` service (role=admin, no
+listener, no published port) executes it within a few seconds. The result
+appears on the domains page.
+
+What makes that meaningfully narrower than just handing over the key is that a
+request is not a command. It is a `JobType`, and that enum has two members:
+`add_domain` and `verify_domain`. There is no way to express "delete a
+mailbox", so a fully compromised API cannot ask for one.
+
+The provisioner is also given less than the admin CLI: it holds the MXRoute
+credential but **not** the mailbox encryption key, because domain work never
+decrypts a password.
+
+If `EMAILD_MXROUTE_*` is unset, the provisioner idles and says so, leaving
+queued jobs pending. Add the credentials, restart, and the work runs.
+
+### Why mailboxes are still CLI-only
+
+Provisioning needs both the MXRoute credential *and* the encryption key, and it
+is the one action that can breach MXRoute's acceptable-use policy — minting
+extra mailboxes to multiply a sending budget risks account termination. That is
+a judgement call, and it belongs to a person at a terminal:
+
+```bash
+./appctl admin mailboxes provision noreply@yourdomain.com
+```
 
 ### Starting a new product, entirely in the browser
 
