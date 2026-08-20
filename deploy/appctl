@@ -132,8 +132,15 @@ cmd_status() {
   compose ps --format 'table {{.Service}}\t{{.Status}}'
   if postgres_running; then
     info ""
-    compose exec -T api python -m emaild.admin status 2>/dev/null \
-      || warn "could not reach the admin CLI (is the api container up?)"
+    # Was `compose exec -T api python -m emaild.admin status`, which could
+    # never work: role=api is forbidden the encryption key that emaild.admin
+    # requires. It failed silently into a warning blaming the api container,
+    # which was healthy and was never the right place to ask.
+    admin_cli status \
+      || warn "the admin CLI failed; run './appctl admin status' to see why"
+  else
+    info ""
+    warn "postgres is not running, so there is no overview to show"
   fi
 }
 
@@ -178,10 +185,24 @@ cmd_logs() { compose logs "${@:---tail=100}" ; }
 # Provisioning commands. Runs a one-off container in the admin role, because the
 # api and worker containers deliberately do NOT hold the MXRoute account-root
 # credential -- running these inside them is refused at startup, by design.
+# The ONLY way to run a provisioning command.
+#
+# Not `compose exec api python -m emaild.admin`: the api container is
+# role=api, which config.py forbids from holding the mailbox encryption key,
+# and emaild.admin requires role=admin precisely because it needs that key.
+# The api container therefore cannot run an admin command by design -- it is
+# not a matter of the container being up.
+#
+# --no-deps because postgres is already running; without it compose would
+# start a second one.
+admin_cli() {
+  compose run --rm --no-deps admin "$@"
+}
+
 cmd_admin() {
   require_env
   [ $# -gt 0 ] || { err "usage: appctl admin <command> [args]"; exit "$EX_USAGE"; }
-  compose run --rm --no-deps admin "$@"
+  admin_cli "$@"
 }
 
 # ---------------------------------------------------------------------------

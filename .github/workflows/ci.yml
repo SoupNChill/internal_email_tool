@@ -186,6 +186,26 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           shellcheck -S warning deploy/appctl scripts/secret-scan.sh
 
+      # Written three times now -- twice in docs, once in appctl, where it
+      # silently degraded `status` into a warning that blamed a healthy
+      # container. role=api is forbidden the mailbox encryption key that
+      # emaild.admin requires, so the api container CANNOT run an admin
+      # command. It reads plausibly every time, which is why it needs a guard
+      # rather than more care. The admin service exists for this.
+      - name: No admin commands routed through the api container
+        run: |
+          # Comment lines are excluded: the fix documents the wrong form in
+          # order to explain why it is wrong, and that must not trip the guard.
+          if grep -rn --include='*.sh' --include='*.md' --include='*.yaml' \
+                      --include='*.yml' --include='appctl' \
+                      -E '(exec|run)[^|;]*\bapi\b[^|;]*emaild\.admin' . \
+             | grep -v '^\./\.github/workflows/ci\.yml:' \
+             | grep -vE ':[0-9]+:[[:space:]]*#'; then
+            echo "::error::admin commands must use the 'admin' service, not the api container"
+            exit 1
+          fi
+          echo "no admin commands routed through api"
+
   compose:
     name: Production compose is deployable
     runs-on: ubuntu-latest
