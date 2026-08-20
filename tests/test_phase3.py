@@ -278,3 +278,55 @@ def test_display_name_does_not_widen_authorization():
     principal = Principal(api_key_id=1, key_name="k", project_id=1, project_name="p", mailboxes={})
     with pytest.raises(AuthorizationError):
         authorize_sender(principal, "noreply@example.com <attacker@evil.com>")
+
+
+# --- remedies in the not-ready error ---------------------------------------
+#
+# Found on a first real install: the documented sequence is verify, provision,
+# send. Verifying before a mailbox exists correctly leaves the domain at
+# 'verified', provisioning did not recompute it, and the send was refused on a
+# domain whose DNS had been correct all along. The status was accurate and the
+# message still left the operator stuck.
+
+
+async def test_verified_domain_says_how_to_reach_ready(session):
+    key = await _fixture(session, domain_status=DomainStatus.VERIFIED)
+    principal = await resolve_principal(session, key)
+    with pytest.raises(DomainNotReady) as exc:
+        authorize_sender(principal, "noreply@example.com")
+    message = str(exc.value)
+    assert "domains verify" in message
+    assert "DNS is complete" in message
+
+
+async def test_added_domain_is_told_to_publish_records_first(session):
+    key = await _fixture(session, domain_status=DomainStatus.ADDED)
+    principal = await resolve_principal(session, key)
+    with pytest.raises(DomainNotReady) as exc:
+        authorize_sender(principal, "noreply@example.com")
+    assert "domains records" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        DomainStatus.ADDED,
+        DomainStatus.OWNERSHIP_PENDING,
+        DomainStatus.DNS_INCOMPLETE,
+        DomainStatus.VERIFIED,
+        DomainStatus.MISCONFIGURED,
+        DomainStatus.SUSPENDED,
+    ],
+)
+async def test_every_unsendable_status_explains_itself(session, status):
+    """Naming the state without naming the remedy makes the caller translate
+    one into the other, which is what the docs are for and what an error
+    message should spare them."""
+    key = await _fixture(session, domain_status=status)
+    principal = await resolve_principal(session, key)
+    with pytest.raises(DomainNotReady) as exc:
+        authorize_sender(principal, "noreply@example.com")
+    message = str(exc.value)
+    # Beyond the bare "Domain X is 'status' and cannot send." plus the failing
+    # checks the fixture always produces.
+    assert len(message) > 90, f"{status.value} has no remedy: {message}"

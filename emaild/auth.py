@@ -217,8 +217,34 @@ def authorize_sender(principal: Principal, from_value: str) -> tuple[str | None,
             bad = [k for k, v in checks.items() if v.get("result") != "pass" and k != "dmarc"]
             if bad:
                 failing = f" Failing checks: {', '.join(sorted(bad))}."
+
+        # Naming the status without naming the remedy sends the caller to the
+        # docs to translate one into the other. 'verified' especially: its DNS
+        # is already correct and the fix is a single command, which reads
+        # nothing like a DNS problem.
+        remedy = {
+            DomainStatus.VERIFIED: (
+                " Its DNS is complete; run 'appctl admin domains verify"
+                f" {domain.name}' to promote it to ready."
+            ),
+            DomainStatus.ADDED: (
+                " Publish its DNS records ('appctl admin domains records"
+                f" {domain.name}'), then verify it."
+            ),
+            DomainStatus.OWNERSHIP_PENDING: (" The ownership TXT record is not resolving yet."),
+            DomainStatus.DNS_INCOMPLETE: (
+                " Publish the missing records, then run 'appctl admin domains"
+                f" verify {domain.name}'."
+            ),
+            DomainStatus.MISCONFIGURED: (
+                " Its DNS used to pass and no longer does -- something changed" " outside emaild."
+            ),
+            DomainStatus.SUSPENDED: " An operator suspended it.",
+        }.get(domain.status, "")
+
         raise DomainNotReady(
-            f"Domain {domain.name} is '{domain.status.value}' and cannot send.{failing}",
+            f"Domain {domain.name} is '{domain.status.value}' and cannot send."
+            f"{failing}{remedy}",
             param="from",
         )
 

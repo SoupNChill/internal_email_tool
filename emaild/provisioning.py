@@ -128,6 +128,27 @@ async def provision_mailbox(
     session.add(mailbox)
     await session.flush()
 
+    # VERIFIED means "DNS is complete, only a mailbox is missing" -- see
+    # _next_status in emaild/domains.py. We just supplied the missing piece, so
+    # the domain is now sendable and saying otherwise is simply stale.
+    #
+    # Recomputed here rather than left for the next `domains verify` because
+    # nothing tells the operator to run it again: the natural sequence is
+    # verify, provision, send, and that used to end in a domain_not_ready
+    # rejection on a domain whose DNS had been correct the whole time. Found on
+    # a first real install.
+    #
+    # Deliberately narrow. Only VERIFIED is promoted -- never DNS_INCOMPLETE,
+    # MISCONFIGURED, or an operator-controlled status like SUSPENDED, because
+    # for those the missing precondition is not the mailbox and adding one
+    # proves nothing about DNS.
+    if domain.status is DomainStatus.VERIFIED:
+        domain.status = DomainStatus.READY
+        log.info(
+            "domain %s: verified -> ready (first sender identity provisioned)",
+            domain_name,
+        )
+
     log.info("provisioned sender identity %s", address)
     return mailbox, password
 
