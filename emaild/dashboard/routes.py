@@ -226,8 +226,13 @@ def _integration_brief(base_url: str, senders: list[str]) -> str:
     sender = senders[0] if senders else "noreply@yourdomain.com"
     return f"""We send transactional email through a self-hosted service called emaild.
 
-It is wire-compatible with Resend, so use the Resend REST shape you already
-know, with these differences:
+DO NOT install the `resend` package. emaild copies Resend's HTTP shape, not
+its SDK, and that library sends to api.resend.com -- it would appear to work
+and deliver nothing to us. Call the endpoint below directly with whatever HTTP
+client the project already uses (fetch, axios, requests, httpx).
+
+Everything else you know about Resend's REST API applies, with these
+differences:
 
   Base URL:  {base_url}
   Endpoint:  POST {base_url}/v1/emails
@@ -247,7 +252,7 @@ Request body:
   when you can -- HTML-only scores worse with spam filters. Unknown fields are
   rejected rather than ignored.
 
-Response is 202 with:
+Response is 200 with:
   {{ "id": "email_01...", "status": "queued" }}
 
 IMPORTANT -- statuses differ from Resend:
@@ -277,7 +282,12 @@ Errors are JSON: {{ "error": {{ "type": ..., "message": ..., "param": ... }} }}
   suppressed_recipient   that address is on the suppression list
 
 Rate limit: 400 messages per hour per sender address. emaild holds messages
-back rather than letting them fail, so a 202 does not mean it left immediately.
+back rather than letting them fail, so a 200 does not mean it left immediately.
+
+Do not block a user-facing action on this call. It is fast and durable, but it
+is still a network hop to another machine: if emaild is unreachable, a signup
+should still succeed and the email should be retried or reported, not turned
+into a 500 for the user.
 
 Check one message: GET {base_url}/v1/emails/{{id}} -- returns status and a
 timeline. It never returns the body, by design.

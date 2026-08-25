@@ -6,6 +6,11 @@ whole integration.
 The API is **wire-compatible with Resend**, so if you or your assistant already
 know that shape, you already know this one. Change the base URL and it works.
 
+> **Do not install the `resend` package.** This is compatible with Resend's
+> *HTTP API*, not its SDK. That library sends to `api.resend.com`: it would
+> appear to work and deliver nothing here. Call the endpoints directly with
+> whatever HTTP client the project already has.
+
 ---
 
 ## Send an email
