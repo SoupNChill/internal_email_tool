@@ -105,6 +105,7 @@ def _post(client, path: str, data: dict, *, token: object = _VALID, **kw):
         "/projects/create",
         "/suppressions/add",
         "/suppressions/remove",
+        "/test/send",
     ],
 )
 def test_every_mutation_requires_authentication(client, path):

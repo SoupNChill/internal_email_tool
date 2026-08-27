@@ -45,6 +45,7 @@ from emaild.dashboard import csrf
 from emaild.dashboard.auth import check_dashboard_auth
 from emaild.dashboard.forms import many, one, parse_form, stash, take
 from emaild.dashboard.setup_state import next_step
+from emaild.dashboard.testsend import SendRefused, send_options, send_test_message
 from emaild.db import session_scope
 from emaild.jobs import JobError, enqueue, recent
 from emaild.management import (
@@ -663,6 +664,65 @@ async def projects_create(request: Request) -> Response:
         except ManagementError as exc:
             return _back("/keys", error=str(exc))
     return _back("/keys", ok=f"Created project '{name}'.")
+
+
+@router.get("/test", response_class=HTMLResponse)
+async def test_send_form(request: Request) -> Response:
+    """The last step of first-run setup that still lived in a terminal.
+
+    Kept as its own page rather than a panel on the overview because it is not
+    only a setup step: it is the thing you come back to when mail stops and you
+    need to know whether the installation or the application is at fault.
+    """
+    if (refused := _guard(request)) is not None:
+        return refused
+
+    async with session_scope() as session:
+        options = await send_options(session)
+
+    return templates.TemplateResponse(
+        request,
+        "test.html",
+        {
+            **_base(request, "test"),
+            "options": options,
+            "base_url": _base_url(request),
+        },
+    )
+
+
+@router.post("/test/send")
+async def test_send(request: Request) -> Response:
+    if (refused := await _mutation_guard(request)) is not None:
+        return refused
+    form = await parse_form(request)
+    if (bad := await _reject_bad_csrf(request, form, "/test")) is not None:
+        return bad
+
+    settings = get_settings()
+    async with session_scope() as session:
+        try:
+            public_id = await send_test_message(
+                session,
+                option=one(form, "option"),
+                recipient=one(form, "recipient"),
+                base_url=_base_url(request),
+                body_retention_hours=settings.body_retention_hours,
+                idempotency_ttl_hours=settings.idempotency_ttl_hours,
+            )
+        except SendRefused as exc:
+            return _back("/test", error=str(exc))
+
+    # To the message's own timeline rather than back to the form. `queued` is
+    # not `sent`, and the honest thing to show is the page that says so and
+    # then updates -- not a green tick that overstates what has happened.
+    return _back(
+        f"/messages/{public_id}",
+        ok=(
+            "Test message queued. Watch the timeline below: it should reach "
+            "accepted_by_provider within a few seconds. Refresh to update."
+        ),
+    )
 
 
 @router.get("/suppressions", response_class=HTMLResponse)

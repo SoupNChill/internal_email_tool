@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}emaild — send test{% endblock %}
+{% block content %}
+<h1>Send a test message</h1>
+
+{#
+  The step that used to read "now run this curl command". It is worth a whole
+  page rather than a corner of the overview, because it is the first thing to
+  reach for when mail stops months later: if the test arrives, the installation
+  is fine and the fault is in the application calling it.
+#}
+
+{% if not options %}
+  <div class="panel">
+    <h3>Nothing can send yet</h3>
+    <p class="hint">
+      A test needs three things in place: a domain whose DNS is
+      <strong>ready</strong>, a sender identity on it, and an active API key
+      scoped to that sender.
+    </p>
+    <p class="muted">
+      The <a href="/">overview</a> names whichever of those is missing and what
+      to do about it.
+    </p>
+  </div>
+{% else %}
+  <div class="panel">
+    <h3>Where should it go?</h3>
+    <p class="hint">
+      Send it to an inbox you can open — your own is the right choice. The
+      message identifies itself and carries a timestamp.
+    </p>
+    <form method="post" action="/test/send">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="row">
+        <div class="field" style="flex:1 1 18rem">
+          <label for="t-recipient">Send to</label>
+          <input id="t-recipient" name="recipient" type="email" required
+                 placeholder="you@example.com" autocomplete="off">
+        </div>
+        {#
+          One dropdown of (sender, key) pairs rather than two dropdowns. The
+          senders a key may use depend on the key, and two independent
+          selects can express a pairing that does not exist -- which fails
+          with an authorization error that looks like a bug in emaild.
+        #}
+        <div class="field" style="flex:1 1 22rem">
+          <label for="t-option">Send from</label>
+          <select id="t-option" name="option">
+            {% for o in options %}
+              <option value="{{ o.value }}">{{ o.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button type="submit" class="primary">Send test</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h3>What a result actually tells you</h3>
+    <p class="hint">
+      This goes through the same path your application will use — the same
+      authorization, the same limits, the same queue.
+    </p>
+    <table>
+      <tr>
+        <td><span class="pill">queued</span></td>
+        <td>emaild stored it. Nothing has been sent yet.</td>
+      </tr>
+      <tr>
+        <td><span class="pill ok">accepted_by_provider</span></td>
+        <td>
+          MXRoute took custody and answered <code>250</code>. This is as far as
+          any proof goes — it is <em>not</em> confirmation of delivery.
+        </td>
+      </tr>
+      <tr>
+        <td><span class="pill bad">permanently_rejected</span></td>
+        <td>
+          It will not be retried. The message page names the reason, and
+          <a href="/messages">Messages</a> keeps the history.
+        </td>
+      </tr>
+      <tr>
+        <td class="muted">nothing arrives</td>
+        <td>
+          Check spam first. Then open the message's original source and confirm
+          SPF, DKIM and DMARC all pass — a domain can be <strong>ready</strong>
+          here and still be treated as spam elsewhere.
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <p class="muted" style="font-size:.85rem">
+    Test messages count against the sender's 400-per-hour budget and appear in
+    <a href="/messages">Messages</a> like any other.
+  </p>
+{% endif %}
+{% endblock %}

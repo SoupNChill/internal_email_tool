@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from emaild.models import ApiKey, Domain, DomainStatus, Mailbox, Project
+from emaild.models import ApiKey, Domain, DomainStatus, Mailbox, Message, Project
 
 
 @dataclass
@@ -153,6 +153,24 @@ async def next_step(session: AsyncSession, base_url: str) -> NextStep:
             ),
             href="/keys",
             link_label="Create one",
+        )
+
+    # Everything is configured -- but "configured" and "working" are different
+    # claims, and only one of them can be demonstrated. Until a message has
+    # actually been through the pipeline, the honest next step is to send one.
+    sent = (await session.execute(select(func.count(Message.id)))).scalar_one()
+    if sent == 0:
+        return NextStep(
+            title="Send a test message",
+            why=(
+                "Everything is configured. Sending one message to your own inbox "
+                "is what proves it: DNS, the sender identity's SMTP credential, "
+                "and delivery through MXRoute are all exercised, and any of them "
+                "being wrong is much easier to find now than from inside an "
+                "application."
+            ),
+            href="/test",
+            link_label="Send one",
         )
 
     return NextStep(

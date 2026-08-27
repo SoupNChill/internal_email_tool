@@ -53,13 +53,28 @@ Check without credentials:
 ```bash
 token=$(curl -fsSL "https://ghcr.io/token?scope=repository:soupnchill/emaild:pull&service=ghcr.io" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $token" \
-  https://ghcr.io/v2/soupnchill/emaild/manifests/0.12.1-rc.1
+  https://ghcr.io/v2/soupnchill/emaild/manifests/0.13.0-rc.1
 ```
 
 `200` means public. `403` means the package is still private — fix it at
 *Packages → emaild → Package settings → Danger Zone → Change visibility*.
 
 ---
+
+## Is it emaild, or is it my application?
+
+Answer this before anything else. Open the dashboard, go to **Send test**, and
+send one message to your own inbox.
+
+| Result | What it means |
+|---|---|
+| It arrives | The installation is fine. The fault is in the application — its base URL, its key, or the call itself. |
+| `permanently_rejected` | The message page names the reason. Start there, not here. |
+| Stuck at `queued` | The worker is not consuming the queue — see the next section. |
+| Nothing arrives, status `accepted_by_provider` | MXRoute took it and something after that dropped it — see *Mail is accepted but never arrives*. |
+
+It goes through the same path an application uses, including the same key and
+the same scope check, so a passing test genuinely narrows the problem.
 
 ## Mail is queued but nothing is being delivered
 

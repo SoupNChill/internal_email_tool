@@ -24,6 +24,7 @@ from emaild.models import (
     Domain,
     DomainStatus,
     Mailbox,
+    Message,
     Project,
 )
 
@@ -106,13 +107,41 @@ async def test_project_without_a_key_asks_for_a_key(session):
     assert step.href == "/keys"
 
 
-async def test_a_complete_installation_says_it_is_ready(session):
+async def _fully_configured(session) -> tuple[Domain, Mailbox, Project]:
     d = await _domain(session, DomainStatus.READY)
-    await _mailbox(session, d)
+    m = await _mailbox(session, d)
     project = Project(name="app", active=True)
     session.add(project)
     await session.flush()
     session.add(ApiKey(project_id=project.id, name="k", key_hash="h", key_prefix="em_live_abc123"))
+    await session.flush()
+    return d, m, project
+
+
+async def test_a_configured_installation_is_asked_to_prove_it_works(session):
+    """Configured is not the same claim as working, and only one of the two can
+    be demonstrated. Until a message has actually been through the pipeline the
+    honest next step is to send one -- not to declare success."""
+    await _fully_configured(session)
+
+    step = await next_step(session, BASE)
+    assert not step.done
+    assert step.href == "/test"
+
+
+async def test_a_proven_installation_says_it_is_ready(session):
+    """Once a message exists, the pipeline has been exercised and the next
+    useful thing really is the integration brief."""
+    _, mailbox, project = await _fully_configured(session)
+    session.add(
+        Message(
+            public_id="email_01TESTTESTTESTTESTTESTTEST",
+            project_id=project.id,
+            mailbox_id=mailbox.id,
+            from_address=mailbox.address,
+            to_addresses=["someone@example.net"],
+        )
+    )
     await session.flush()
 
     step = await next_step(session, BASE)

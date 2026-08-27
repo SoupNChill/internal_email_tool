@@ -161,8 +161,18 @@ things, in two places: the archive and the encryption key.
 ./appctl doctor
 ```
 
-Exit 0 means everything checks out. Then send a test message using
-[integration.md](integration.md).
+Exit 0 means everything checks out.
+
+Then prove it end to end: open the dashboard, go to **Send test**, and send one
+message to your own inbox. That exercises the same path an application will use
+— DNS, the sender identity's SMTP credential, and delivery through MXRoute — so
+if it arrives, the installation is done. It is also the first thing to reach for
+later, when mail stops and you need to know whether the fault is here or in the
+application calling it.
+
+When it arrives, open its original source (in Gmail: the three-dot menu, then
+*Show original*) and confirm SPF, DKIM and DMARC all pass. A domain can be
+`ready` here and still be treated as spam elsewhere.
 
 ## Upgrading
 
