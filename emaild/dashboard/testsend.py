@@ -235,7 +235,11 @@ async def blocked_senders(session: AsyncSession) -> list[Blocked]:
                         "authorization your application will hit is exercised "
                         "here too."
                     ),
-                    fix="Create a key scoped to it, or tick it on an existing one.",
+                    # NOT "add it to an existing key": scopes are set once, at
+                    # creation, and there is no edit path in the dashboard or
+                    # the CLI. Advice that names an impossible action is the
+                    # exact failure this panel was added to stop.
+                    fix="Create a key and tick this address in 'Send as'.",
                     href="/keys",
                 )
             )

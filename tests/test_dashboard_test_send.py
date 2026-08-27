@@ -195,6 +195,9 @@ async def test_a_sender_with_no_key_scoped_to_it_is_explained(seeded):
     entry = next(b for b in blocked if b.subject == OTHER_SENDER)
     assert "no active api key" in entry.reason.lower()
     assert entry.href == "/keys"
+    # Scopes are set once, at creation -- there is no way to add one to an
+    # existing key, so the fix must not suggest editing one.
+    assert "existing" not in entry.fix.lower()
 
 
 async def test_a_sender_on_an_unready_domain_names_the_domain_status(seeded):
