@@ -28,7 +28,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from emaild.crypto import generate_api_key
 from emaild.dashboard import csrf
-from emaild.dashboard.testsend import SendRefused, parse_option, send_options, send_test_message
+from emaild.dashboard.testsend import (
+    SendRefused,
+    blocked_senders,
+    parse_option,
+    send_options,
+    send_test_message,
+)
 from emaild.models import (
     ApiKey,
     ApiKeyScope,
@@ -172,6 +178,78 @@ async def test_a_revoked_key_is_not_offered(seeded):
         assert await send_options(session) == []
 
 
+# --- why something is NOT offered ------------------------------------------
+#
+# The dropdown filters silently, and the first operator to add a second domain
+# read the short list as a bug in emaild rather than as unfinished setup. It was
+# a reasonable reading: nothing on the page distinguished the two. These pin
+# that every way an address can be excluded is also explained.
+
+
+async def test_a_sender_with_no_key_scoped_to_it_is_explained(seeded):
+    """The seed has two mailboxes and a key scoped to only one. The unscoped
+    one must be named, not merely absent."""
+    async with seeded() as session:
+        blocked = await blocked_senders(session)
+
+    entry = next(b for b in blocked if b.subject == OTHER_SENDER)
+    assert "no active api key" in entry.reason.lower()
+    assert entry.href == "/keys"
+
+
+async def test_a_sender_on_an_unready_domain_names_the_domain_status(seeded):
+    async with seeded() as session:
+        domain = (await session.execute(select(Domain))).scalar_one()
+        domain.status = DomainStatus.VERIFIED
+        await session.commit()
+
+    async with seeded() as session:
+        blocked = await blocked_senders(session)
+
+    entry = next(b for b in blocked if b.subject == READY_SENDER)
+    assert "verified" in entry.reason
+    assert "example.com" in entry.reason
+    assert entry.href == "/domains"
+
+
+async def test_only_the_first_blocker_is_reported_per_address(seeded):
+    """An unverified domain AND no key is one task, not two -- the second is not
+    actionable until the first is done."""
+    async with seeded() as session:
+        domain = (await session.execute(select(Domain))).scalar_one()
+        domain.status = DomainStatus.DNS_INCOMPLETE
+        await session.commit()
+
+    async with seeded() as session:
+        blocked = await blocked_senders(session)
+
+    for address in (READY_SENDER, OTHER_SENDER):
+        entries = [b for b in blocked if b.subject == address]
+        assert len(entries) == 1
+        assert "dns_incomplete" in entries[0].reason
+
+
+async def test_a_ready_domain_with_no_sender_carries_the_provision_command(engine, seeded):
+    """The most common shape for a brand-new domain: nothing to list per
+    address, so the domain itself has to be named."""
+    async with seeded() as session:
+        session.add(Domain(name="newdomain.com", status=DomainStatus.READY))
+        await session.commit()
+
+    async with seeded() as session:
+        blocked = await blocked_senders(session)
+
+    entry = next(b for b in blocked if b.subject == "newdomain.com")
+    assert "no sender identity" in entry.reason.lower()
+    assert entry.command == "appctl admin mailboxes provision noreply@newdomain.com"
+
+
+async def test_a_fully_working_sender_is_not_reported_as_blocked(seeded):
+    async with seeded() as session:
+        blocked = await blocked_senders(session)
+    assert READY_SENDER not in [b.subject for b in blocked]
+
+
 # --- the boundary the form does not enforce --------------------------------
 
 
@@ -272,10 +350,20 @@ async def test_two_sends_produce_two_messages(seeded):
 def test_the_form_renders_the_available_pairs(client):
     page = client.get("/test", headers=AUTH)
     assert page.status_code == 200
-    assert READY_SENDER in page.text
+    assert page.text.count(f'value="{_IDS["key"]}|{READY_SENDER}"') == 1
     assert "saas-prod" in page.text
-    # The unscoped sender must not appear as an option.
-    assert OTHER_SENDER not in page.text
+    # The unscoped sender must not be SELECTABLE. It does still appear on the
+    # page, in the panel that explains why -- see the test below.
+    assert f"|{OTHER_SENDER}" not in page.text
+
+
+def test_the_page_explains_an_address_it_does_not_offer(client):
+    """The whole point: a short dropdown must not be silent. The unscoped
+    sender is absent from the <select> and present in the explanation."""
+    page = client.get("/test", headers=AUTH).text
+    assert f'value="{_IDS["key"]}|{OTHER_SENDER}"' not in page
+    assert OTHER_SENDER in page
+    assert "Not available to send from" in page
 
 
 def test_a_successful_send_redirects_to_the_message_timeline(client):

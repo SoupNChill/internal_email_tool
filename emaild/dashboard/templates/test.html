@@ -18,10 +18,12 @@
       <strong>ready</strong>, a sender identity on it, and an active API key
       scoped to that sender.
     </p>
+    {% if not blocked %}
     <p class="muted">
       The <a href="/">overview</a> names whichever of those is missing and what
       to do about it.
     </p>
+    {% endif %}
   </div>
 {% else %}
   <div class="panel">
@@ -97,5 +99,36 @@
     Test messages count against the sender's 400-per-hour budget and appear in
     <a href="/messages">Messages</a> like any other.
   </p>
+{% endif %}
+
+{% if blocked %}
+{#
+  The panel that exists because a short dropdown and a broken dropdown look
+  identical. Named per address, in dependency order, with the one thing that
+  would fix it.
+#}
+<div class="panel">
+  <h3>Not available to send from</h3>
+  <p class="hint">
+    These exist but cannot send yet. Each line names the one thing missing.
+  </p>
+  <table>
+    {% for b in blocked %}
+    <tr>
+      <td class="mono" style="white-space:nowrap">{{ b.subject }}</td>
+      <td>
+        {{ b.reason }}
+        <div class="muted" style="margin-top:.25rem">
+          {{ b.fix }}
+          {% if b.href %}<a href="{{ b.href }}">Go there →</a>{% endif %}
+        </div>
+        {% if b.command %}
+        <div class="mono" style="margin-top:.35rem"><code>{{ b.command }}</code></div>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
 {% endif %}
 {% endblock %}

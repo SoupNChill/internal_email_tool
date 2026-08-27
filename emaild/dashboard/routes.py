@@ -45,7 +45,12 @@ from emaild.dashboard import csrf
 from emaild.dashboard.auth import check_dashboard_auth
 from emaild.dashboard.forms import many, one, parse_form, stash, take
 from emaild.dashboard.setup_state import next_step
-from emaild.dashboard.testsend import SendRefused, send_options, send_test_message
+from emaild.dashboard.testsend import (
+    SendRefused,
+    blocked_senders,
+    send_options,
+    send_test_message,
+)
 from emaild.db import session_scope
 from emaild.jobs import JobError, enqueue, recent
 from emaild.management import (
@@ -679,6 +684,10 @@ async def test_send_form(request: Request) -> Response:
 
     async with session_scope() as session:
         options = await send_options(session)
+        # What is NOT offered, and why. An address missing from the dropdown
+        # with no explanation is indistinguishable from a bug -- which is
+        # exactly how the first operator to add a second domain read it.
+        blocked = await blocked_senders(session)
 
     return templates.TemplateResponse(
         request,
@@ -686,6 +695,7 @@ async def test_send_form(request: Request) -> Response:
         {
             **_base(request, "test"),
             "options": options,
+            "blocked": blocked,
             "base_url": _base_url(request),
         },
     )

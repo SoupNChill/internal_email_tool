@@ -144,6 +144,134 @@ async def send_options(session: AsyncSession) -> list[SendOption]:
     return sorted(options, key=lambda o: (o.sender, o.key_name))
 
 
+@dataclass(frozen=True)
+class Blocked:
+    """A sender the operator can see elsewhere but cannot pick here, and why.
+
+    Added after the first person to use this page set up a second domain, found
+    it missing from the dropdown, and could not tell whether that was their
+    setup or a bug in emaild. It was a fair question: the page silently showed
+    a shorter list.
+
+    Silence is the wrong answer for an absence the operator is actively looking
+    for. This codebase has produced that bug repeatedly -- a confident-looking
+    screen that omits the one fact needed to act -- and the fix each time has
+    been to say the specific thing out loud rather than to trust that the state
+    is visible on some other page.
+    """
+
+    subject: str
+    reason: str
+    fix: str
+    href: str | None = None
+    command: str | None = None
+
+
+async def blocked_senders(session: AsyncSession) -> list[Blocked]:
+    """Everything that ALMOST qualifies to send, with the missing piece named.
+
+    Deliberately reports the first blocker only, per address, in dependency
+    order: telling someone their domain is unverified AND has no key is two
+    tasks where there is one, and the second is not actionable until the first
+    is done.
+    """
+    domains = {d.id: d for d in (await session.execute(select(Domain))).scalars().all()}
+    mailboxes = list((await session.execute(select(Mailbox))).scalars().all())
+
+    keys = (
+        (
+            await session.execute(
+                select(ApiKey)
+                .where(ApiKey.active, ApiKey.revoked_at.is_(None))
+                .options(selectinload(ApiKey.scopes), selectinload(ApiKey.project))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    scoped_mailbox_ids = {
+        scope.mailbox_id for key in keys if key.project.active for scope in key.scopes
+    }
+
+    blocked: list[Blocked] = []
+
+    for mailbox in sorted(mailboxes, key=lambda m: m.address):
+        domain = domains.get(mailbox.domain_id)
+        if domain is None:
+            continue
+
+        if domain.status is not DomainStatus.READY:
+            blocked.append(
+                Blocked(
+                    subject=mailbox.address,
+                    reason=(
+                        f"{domain.name} is {domain.status.value}, not ready. "
+                        "Only a ready domain may send."
+                    ),
+                    fix="Re-check its DNS.",
+                    href="/domains",
+                )
+            )
+            continue
+
+        if not mailbox.active:
+            blocked.append(
+                Blocked(
+                    subject=mailbox.address,
+                    reason="This sender identity is deactivated.",
+                    fix="Re-provision it.",
+                    command=f"appctl admin mailboxes provision {mailbox.address}",
+                )
+            )
+            continue
+
+        if mailbox.id not in scoped_mailbox_ids:
+            blocked.append(
+                Blocked(
+                    subject=mailbox.address,
+                    reason=(
+                        "No active API key is scoped to this address. A test "
+                        "sends through a real key, so that the same "
+                        "authorization your application will hit is exercised "
+                        "here too."
+                    ),
+                    fix="Create a key scoped to it, or tick it on an existing one.",
+                    href="/keys",
+                )
+            )
+
+    # A ready domain with no mailbox at all: nothing to list per-address above,
+    # and the most common reason a brand-new domain is missing entirely.
+    with_mailbox = {m.domain_id for m in mailboxes}
+    for domain in sorted(domains.values(), key=lambda d: d.name):
+        if domain.id in with_mailbox:
+            continue
+        if domain.status is DomainStatus.READY:
+            reason = "This domain has no sender identity yet."
+        elif domain.status is DomainStatus.VERIFIED:
+            reason = "DNS is complete, but there is no sender identity yet."
+        else:
+            blocked.append(
+                Blocked(
+                    subject=domain.name,
+                    reason=f"This domain is {domain.status.value}, not ready.",
+                    fix="Publish the records it lists, then re-check.",
+                    href="/domains",
+                )
+            )
+            continue
+        blocked.append(
+            Blocked(
+                subject=domain.name,
+                reason=reason,
+                fix="Provision one on the server — it needs the MXRoute credential.",
+                command=f"appctl admin mailboxes provision noreply@{domain.name}",
+            )
+        )
+
+    return blocked
+
+
 def parse_option(raw: str) -> tuple[int, str]:
     """Split a submitted `key_id|sender` value. Never trusts the shape."""
     key_part, _, sender = raw.partition("|")
