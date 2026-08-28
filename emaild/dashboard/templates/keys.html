@@ -11,9 +11,27 @@
 #}
 <div class="panel">
   <h3>New key</h3>
-  <p class="hint">Shown once at creation and never recoverable.</p>
+  {#
+    Every label here was rewritten after an operator with two sender identities
+    could not work out how to issue a key for the second one. Three separate
+    faults, all of them this template's:
+
+      1. The submit button sat INSIDE the first row, above "Send as". The form
+         therefore looked like it ended at the button, and the checkboxes read
+         as an unrelated section below it. The button now comes last, which is
+         the only order that describes what the form does.
+      2. "Name" was ambiguous. It names the KEY, and with a mailbox address
+         sitting a few lines below it was read as the mailbox to create.
+      3. Nothing said the tick boxes were required, or that they select among
+         senders that ALREADY exist rather than creating one.
+  #}
+  <p class="hint">
+    A key is the password one application uses to send. It works only for the
+    addresses you tick below, so a leaked key can send as those and nothing
+    else.
+  </p>
   {% if not projects %}
-    <p class="muted">Create a project first.</p>
+    <p class="muted">Create a project first — the form is just below.</p>
   {% elif not senders %}
     <p class="muted">
       No sender identities are available. A key can only be scoped to a mailbox
@@ -25,20 +43,27 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="row">
       <div class="field">
-        <label for="k-name">Name</label>
+        <label for="k-name">Key name</label>
         <input id="k-name" name="name" required maxlength="64" placeholder="billing-prod">
+        <span class="muted" style="font-size:.8rem">A label for you, not an address.</span>
       </div>
       <div class="field">
         <label for="k-project">Project</label>
         <select id="k-project" name="project">
           {% for p in projects %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
         </select>
+        <span class="muted" style="font-size:.8rem">
+          Which application. Add one below if it is not listed.
+        </span>
       </div>
-      <button type="submit" class="primary">Create key</button>
     </div>
-    <div class="field" style="margin-top:.7rem">
-      <label>Send as</label>
-      <div class="checks">
+    <div class="field" style="margin-top:.9rem">
+      <label>Send as — tick at least one</label>
+      <span class="muted" style="font-size:.8rem;text-transform:none;letter-spacing:0">
+        Existing sender identities. Ticking one does not create a mailbox; it
+        permits this key to send as that address.
+      </span>
+      <div class="checks" style="margin-top:.4rem">
         {% for s in senders %}
         <label>
           <input type="checkbox" name="mailbox" value="{{ s }}"
@@ -47,6 +72,13 @@
         </label>
         {% endfor %}
       </div>
+    </div>
+    {# Last, because everything above it is part of what gets submitted. #}
+    <div class="row" style="margin-top:.9rem">
+      <button type="submit" class="primary">Create key</button>
+      <span class="muted" style="font-size:.8rem">
+        Shown once, here, and never recoverable.
+      </span>
     </div>
   </form>
   {% endif %}

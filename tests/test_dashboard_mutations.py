@@ -298,3 +298,35 @@ def test_csrf_token_differs_between_installations():
         _env_file=None, role="api", database_url="postgresql+asyncpg://x/y", dashboard_token="bbbb"
     )  # type: ignore[arg-type]
     assert csrf.issue_token(a) != csrf.issue_token(b)
+
+
+# --- the key form's layout -------------------------------------------------
+#
+# From an operator who had two sender identities and could not work out how to
+# issue a key for the second. The submit button was rendered inside the first
+# row, ABOVE the "Send as" checkboxes, so the form appeared to end before the
+# field they needed. These pin the ordering, because it is the kind of thing a
+# later edit reintroduces silently -- the page still renders, still passes every
+# other test, and is still unusable in exactly the same way.
+
+
+def test_the_submit_button_comes_after_every_field_it_submits(client):
+    page = client.get("/keys", headers=AUTH).text
+    form = page.split('action="/keys/create"')[1].split("</form>")[0]
+    assert form.index('name="name"') < form.index("Create key")
+    assert form.index('name="mailbox"') < form.index("Create key")
+
+
+def test_the_key_name_field_says_it_is_not_an_address(client):
+    """It sits inches above a list of email addresses and was read as one."""
+    page = client.get("/keys", headers=AUTH).text
+    form = page.split('action="/keys/create"')[1].split("</form>")[0]
+    assert "Key name" in form
+    assert "not an address" in form
+
+
+def test_the_sender_checkboxes_say_they_are_required(client):
+    """create_api_key refuses a key with no scope, so a form that does not say
+    so turns a rule into a surprise."""
+    form = client.get("/keys", headers=AUTH).text.split('action="/keys/create"')[1]
+    assert "tick at least one" in form.split("</form>")[0].lower()
