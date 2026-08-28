@@ -201,3 +201,70 @@ def test_fetching_a_message_never_returns_its_body(client):
 
 def test_an_unknown_message_id_is_404(client):
     assert client.get("/v1/emails/email_01NOPE", headers=_auth()).status_code == 404
+
+
+# --- the generated brief ---------------------------------------------------
+#
+# The /integrate brief and docs/integration.md say the same things to the same
+# audience, and only one of them carries the installation's real base URL and
+# sender -- so the generated one is the copy that actually gets handed to an
+# assistant. It had already drifted: the static doc warned that an idempotency
+# key must be derived from the thing being emailed, and the brief did not.
+# The weaker document was the one in use.
+#
+# These pin the guidance that is expensive to omit, in the copy people use.
+
+
+def _brief() -> str:
+    from emaild.dashboard.routes import _integration_brief
+
+    return _integration_brief("http://192.168.1.5:8000", ["noreply@example.com"])
+
+
+def test_the_brief_forbids_the_resend_sdk():
+    """The failure it prevents is silent: the library would appear to work and
+    deliver to api.resend.com instead of here."""
+    brief = _brief().lower()
+    assert "do not install the `resend` package" in brief
+    assert "api.resend.com" in brief
+
+
+def test_the_brief_says_idempotency_keys_must_not_be_random():
+    """A fresh UUID per attempt makes the header useless -- a retry after a
+    timeout sends a second real email, and testing will not catch it because
+    the first attempt usually succeeds."""
+    brief = _brief()
+    assert "Idempotency-Key" in brief
+    assert "Do NOT generate a fresh UUID per attempt" in brief
+
+
+def test_the_brief_demands_an_explicit_timeout():
+    """Without one, "do not block signup" is aspiration rather than
+    instruction: the default client timeout blocks it anyway."""
+    assert "timeout" in _brief().lower()
+
+
+def test_the_brief_keeps_the_key_out_of_source():
+    assert "EMAILD_API_KEY" in _brief()
+    assert "do not commit it" in _brief().lower()
+
+
+def test_the_brief_never_promises_delivery():
+    brief = _brief()
+    assert "There is NO `delivered` status" in brief
+    assert "accepted_by_provider" in brief
+
+
+def test_the_brief_states_the_status_code_the_api_actually_returns():
+    """The original defect this file was created for: the brief said 202 and
+    the API answers 200, which becomes `if (res.status === 202)` in somebody's
+    signup flow.
+
+    Matched as a response claim rather than as the bare digits -- "202"
+    appears legitimately inside the example idempotency key's date, and a
+    substring check failed on the tool's own sample.
+    """
+    brief = _brief()
+    assert "Response is 200" in brief
+    for claim in ("Response is 202", "202 Accepted", "returns 202", "status 202"):
+        assert claim not in brief

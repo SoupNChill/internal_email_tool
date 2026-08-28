@@ -228,6 +228,13 @@ def _integration_brief(base_url: str, senders: list[str]) -> str:
     that reads a spec, recognises it as Resend-shaped, and then confidently
     polls for a `delivered` status this API will never return -- so that is
     stated as a rule, near the top, not left as a footnote in a status table.
+
+    Kept deliberately in sync with docs/integration.md. This text had already
+    drifted from it once: the doc warned that an idempotency key must be
+    derived from the thing being emailed rather than randomly generated, and
+    this brief did not -- while being the version people actually hand over,
+    because it is the one carrying their real base URL and sender. The weaker
+    document was the one in use. Anything added to one belongs in both.
     """
     sender = senders[0] if senders else "noreply@yourdomain.com"
     return f"""We send transactional email through a self-hosted service called emaild.
@@ -245,18 +252,25 @@ differences:
   Auth:      Authorization: Bearer <the key I will give you>
   From:      must be exactly one of: {", ".join(senders) or sender}
 
+Put the base URL and the key in environment variables (EMAILD_URL and
+EMAILD_API_KEY). Do not hardcode the key in source and do not commit it: it
+sends mail signed as our domain, and anything holding it can do the same.
+
 Request body:
   {{
-    "from": "{sender}",
+    "from": "Acme <{sender}>",
     "to": "customer@example.com",
     "subject": "Verify your email",
     "html": "<p>Click to verify.</p>",
     "text": "Click to verify."
   }}
 
-  `to`, `cc`, `bcc` accept a string or an array. Send both `html` and `text`
-  when you can -- HTML-only scores worse with spam filters. Unknown fields are
-  rejected rather than ignored.
+  `from` may be the bare address or `Display Name <address>`, but the address
+  part must match one of the senders above exactly. `to`, `cc`, `bcc` accept a
+  string or an array. `reply_to` is supported and is where replies should go if
+  the sender above is unattended. Send both `html` and `text` when you can --
+  HTML-only scores worse with spam filters. Unknown fields are rejected rather
+  than ignored.
 
 Response is 200 with:
   {{ "id": "email_01...", "status": "queued" }}
@@ -280,12 +294,23 @@ Retries and idempotency:
   different body is rejected. Do not implement your own send-retry loop --
   emaild owns delivery retries.
 
+  The VALUE matters. Derive it from the thing being emailed about, so that a
+  retry of the same logical send produces the same key:
+
+      Idempotency-Key: pwreset-user-1234-20260827
+
+  Do NOT generate a fresh UUID per attempt. A random key is a different key,
+  so a retry after a timeout sends a second real email -- which is the exact
+  duplicate this header exists to prevent, and it will not be noticed in
+  testing because the first attempt usually succeeds.
+
 Errors are JSON: {{ "error": {{ "type": ..., "message": ..., "param": ... }} }}
   authentication_error   key missing, malformed, or revoked
   authorization_error    the key may not send as that `from`
   domain_not_ready       the sending domain's DNS is incomplete
   validation_error       `param` names the bad field
-  suppressed_recipient   that address is on the suppression list
+  suppressed_recipient   that address previously bounced or complained. Do not
+                         retry it; only an operator can clear it.
 
 Rate limit: 400 messages per hour per sender address. emaild holds messages
 back rather than letting them fail, so a 200 does not mean it left immediately.
@@ -294,6 +319,12 @@ Do not block a user-facing action on this call. It is fast and durable, but it
 is still a network hop to another machine: if emaild is unreachable, a signup
 should still succeed and the email should be retried or reported, not turned
 into a 500 for the user.
+
+Set an explicit timeout on the request -- 10 seconds is plenty. Without one,
+many HTTP clients wait far longer or forever, and "do not block signup" becomes
+a blocked signup the first time this host is down. On timeout or connection
+failure, record it and move on; if you retry later, reuse the SAME
+Idempotency-Key so a send that actually succeeded is not duplicated.
 
 Check one message: GET {base_url}/v1/emails/{{id}} -- returns status and a
 timeline. It never returns the body, by design.
