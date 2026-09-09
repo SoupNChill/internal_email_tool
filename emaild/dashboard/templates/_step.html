@@ -1,0 +1,27 @@
+{#
+  One NextStep, rendered identically wherever it appears.
+
+  A macro rather than duplicated markup because the overview and the domains
+  page show the same object for the same reason, and the second copy is where
+  they drift: it was the domains page that quietly rendered "needs a sender
+  identity" as grey text next to a timestamp, at the same weight as the
+  last-checked time, while the overview rendered the same state as a bordered
+  panel with the exact command. An operator on the domains page saw a status
+  and no instruction.
+
+  `command` is user-select:all so one click takes the whole line -- the same
+  reason DKIM values are, and for the same failure: a partially selected
+  command is worse than none, because it runs.
+#}
+{% macro step_panel(step, accent=true) %}
+<div class="panel" style="border-color: {{ 'var(--ok)' if step.done else ('var(--accent)' if accent else 'var(--line)') }}">
+  <h3>{% if step.done %}✓ {% endif %}{{ step.title }}</h3>
+  <p class="hint">{{ step.why }}</p>
+  {% if step.command %}
+  <div class="value mono" style="user-select:all;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:.55rem .7rem;font-size:.9rem">{{ step.command }}</div>
+  {% endif %}
+  {% if step.href %}
+  <p style="margin:.7rem 0 0"><a href="{{ step.href }}">{{ step.link_label }} →</a></p>
+  {% endif %}
+</div>
+{% endmacro %}

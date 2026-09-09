@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_step.html" import step_panel %}
 {% block title %}emaild — domains{% endblock %}
 {% block content %}
 <h1>Domains</h1>
@@ -55,17 +56,24 @@
   <div class="row" style="justify-content:space-between">
     <div>
       <h3 class="mono">{{ d.name }}</h3>
+      {#
+        The status pill only. What to DO about it is the panel below, because
+        a one-line hint at the same weight as the timestamp is not an
+        instruction -- which is exactly how an operator came to be stranded on
+        `verified` with the words "needs a sender identity" on screen and no
+        idea what that meant or where to do it.
+      #}
       <p class="hint" style="margin:0">
         <span class="pill {{ 'ok' if d.status == 'ready' else ('bad' if d.status in ('misconfigured','suspended') else 'warn') }}">{{ d.status }}</span>
         {% if d.status == 'ready' %}can send{% endif %}
-        {% if d.status == 'verified' %}DNS is complete — needs a sender identity{% endif %}
-        {% if d.status == 'dns_incomplete' %}publish the records below{% endif %}
-        {% if d.status == 'added' %}publish the records below, then verify{% endif %}
-        {% if d.status == 'misconfigured' %}was working; DNS changed outside emaild{% endif %}
         <span class="muted"> · checked {{ d.checked or 'never' }}</span>
       </p>
     </div>
   </div>
+
+  {% if actions.get(d.name) %}
+  <div style="margin-top:.9rem">{{ step_panel(actions[d.name]) }}</div>
+  {% endif %}
 
   {% if d.missing %}
   {#

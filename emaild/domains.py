@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from emaild.dnscheck import DomainDnsReport, verify_domain
 from emaild.models import Domain, DomainStatus, Mailbox
 from emaild.providers.mxroute import (
+    MXRouteAuthError,
     MXRouteClient,
     MXRouteConflict,
     MXRouteError,
@@ -246,3 +247,67 @@ def required_dns_records(domain_name: str, dns_info: dict) -> list[dict[str, str
 
     records.append({"type": "TXT", "name": "_dmarc", "value": "v=DMARC1; p=none;", "priority": ""})
     return records
+
+
+def domain_add_advice(exc: MXRouteError, domain: str) -> str:
+    """What to actually do about a failed `domains add`.
+
+    Separated from the command so the mapping can be tested without a provider
+    or a database, and because it is the part that was wrong: every provider
+    error used to produce the ownership-TXT hint, so a 401 -- credentials
+    rejected, nothing to do with DNS -- sent the operator off to publish a
+    record that was never the problem. Advice that confidently names the wrong
+    cause is worse than no advice, because it is followed.
+    """
+    if isinstance(exc, MXRouteAuthError):
+        return (
+            "The credentials were rejected, so this is not a DNS problem.\n"
+            "Check EMAILD_MXROUTE_* in the .env beside compose.yaml:\n"
+            "  EMAILD_MXROUTE_USERNAME is the account username -- not your\n"
+            "    email address, and not the domain.\n"
+            "  EMAILD_MXROUTE_SERVER is the mail server hostname, for example\n"
+            "    chocobo.mxrouting.net -- not api.mxroute.com.\n"
+            "\nTest them directly (200 means good, 401 means still wrong):\n"
+            "  curl -s -o /dev/null -w '%{http_code}\\n' \\\n"
+            '    -H "X-Server: <server>" -H "X-Username: <username>" \\\n'
+            '    -H "X-API-Key: <key>" https://api.mxroute.com/domains'
+        )
+    if isinstance(exc, MXRouteConflict):
+        return (
+            f"{domain} already exists on the MXRoute account. Adding it here "
+            "only starts tracking it locally; it is not created again."
+        )
+    return (
+        "If the domain is new to this account, the ownership TXT record may "
+        "not be resolving yet. Run 'domains token' and publish it first."
+    )
+
+
+async def add_failure_message(client: MXRouteClient, exc: MXRouteError, domain: str) -> str:
+    """The advice above, plus the actual record when ownership is the cause.
+
+    The CLI could get away with telling the operator to run `domains token`.
+    The dashboard cannot: the queue runs this on the provisioner, the operator
+    sees only the job's result string, and "go and run a command" is the
+    friction the dashboard exists to remove.
+
+    So for the ownership case -- the one where MXRoute's own message sends
+    people to panel.mxroute.com to look up a record emaild can simply fetch --
+    the record is fetched and included. A failure to fetch it is swallowed: the
+    advice is still worth having, and an error raised while explaining an error
+    only obscures the first one.
+    """
+    advice = domain_add_advice(exc, domain)
+    if isinstance(exc, MXRouteAuthError | MXRouteConflict):
+        return advice
+    try:
+        record = await get_verification_record(client)
+    except Exception:  # noqa: BLE001
+        log.warning("could not fetch the ownership record while explaining a failed add")
+        return advice
+    return (
+        f"{advice}\n\n"
+        f"Publish this TXT record, wait 5-15 minutes, then add the domain again:\n"
+        f"  Name:  {record['name']}\n"
+        f"  Value: {record['value']}"
+    )

@@ -244,7 +244,7 @@ async def test_a_ready_domain_with_no_sender_carries_the_provision_command(engin
 
     entry = next(b for b in blocked if b.subject == "newdomain.com")
     assert "no sender identity" in entry.reason.lower()
-    assert entry.command == "appctl admin mailboxes provision noreply@newdomain.com"
+    assert entry.command == "./appctl admin mailboxes provision noreply@newdomain.com"
 
 
 async def test_a_fully_working_sender_is_not_reported_as_blocked(seeded):

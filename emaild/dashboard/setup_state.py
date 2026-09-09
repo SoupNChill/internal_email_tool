@@ -21,6 +21,20 @@ where the friction was.
 
 Kept separate from routes.py because it is a decision, not a rendering, and a
 decision is worth testing on its own.
+
+Rewritten after the same operator got stuck a second time, months later, adding
+a domain to a WORKING installation. Every branch below used to be guarded on
+`not ready` -- meaning the guidance existed only until the first domain started
+sending, and then went quiet forever. A half-finished second domain was
+invisible to it, and the overview cheerfully said "Ready to send" while the new
+domain sat at `verified` with nothing anywhere naming the next step.
+
+That is the more important case, not the lesser one: on the first run the
+operator is following instructions and paying attention, and by the second they
+have forgotten the vocabulary and expect the tool to carry it. So the per-domain
+decision is now its own function, it runs for every domain regardless of how
+many others are working, and the domains page renders it inline -- on the page
+the operator is already looking at when they get stuck.
 """
 
 from __future__ import annotations
@@ -48,6 +62,95 @@ class NextStep:
     done: bool = False
 
 
+def domain_next_action(domain: Domain, *, has_mailbox: bool) -> NextStep | None:
+    """What this ONE domain needs, or None when it needs nothing.
+
+    Separate from `next_step` so the domains page can render it beside each
+    domain. That placement is the point: an operator who knows they are working
+    on domains goes to /domains, and the answer needs to be there rather than on
+    a panel they would have to think to visit.
+    """
+    if domain.status is DomainStatus.READY:
+        return None
+
+    if domain.status is DomainStatus.SUSPENDED:
+        return NextStep(
+            title=f"{domain.name} is suspended",
+            why=(
+                "Suspension is set deliberately and the automatic DNS sweep will "
+                "not clear it. Nothing will send from this domain until it is "
+                "lifted."
+            ),
+        )
+
+    if domain.status in (
+        DomainStatus.ADDED,
+        DomainStatus.DNS_INCOMPLETE,
+        DomainStatus.OWNERSHIP_PENDING,
+        DomainStatus.MISCONFIGURED,
+    ):
+        why = (
+            "Receiving servers check DNS to confirm you may send as this domain. "
+            "Until those records resolve, mail would be rejected or land in spam, "
+            "so emaild will not send at all."
+        )
+        if domain.status is DomainStatus.MISCONFIGURED:
+            why = (
+                "This domain was working and its DNS no longer checks out, so "
+                "something changed outside emaild. Compare the records below "
+                "against your registrar."
+            )
+        return NextStep(
+            title=f"Publish the DNS records for {domain.name}",
+            why=why + " They are listed below; re-check once they resolve.",
+        )
+
+    # VERIFIED: DNS is complete and there is no mailbox to send from. This is
+    # the step that stranded a real operator twice -- it is the only one in the
+    # whole flow that cannot be done in the browser, because provisioning needs
+    # both the MXRoute credential and the mailbox encryption key, and the api
+    # container mounts neither.
+    if not has_mailbox:
+        return NextStep(
+            title=f"Create a sender identity on {domain.name}",
+            why=(
+                "DNS is complete — this is the last step. A sender identity is "
+                "one real address like noreply@" + domain.name + ", an actual "
+                "mailbox with its own 400-per-hour budget, and mail can only be "
+                "sent from one that exists. It is the one step that cannot be "
+                "done here: creating it needs the MXRoute credential, which this "
+                "container deliberately does not hold. Run this on the server, "
+                "in the directory holding compose.yaml. The domain becomes "
+                "ready by itself once it succeeds."
+            ),
+            command=f"./appctl admin mailboxes provision noreply@{domain.name}",
+        )
+
+    return NextStep(
+        title=f"Re-check {domain.name}",
+        why=(
+            "The domain has a sender identity but is still marked verified "
+            "rather than ready. One re-check promotes it."
+        ),
+        href="/domains",
+        link_label="Re-check it",
+    )
+
+
+async def domain_actions(session: AsyncSession) -> dict[str, NextStep]:
+    """`domain_next_action` for every tracked domain, keyed by domain name."""
+    domains = (await session.execute(select(Domain))).scalars().all()
+    with_mailbox = set(
+        (await session.execute(select(Mailbox.domain_id).where(Mailbox.active))).scalars().all()
+    )
+    out: dict[str, NextStep] = {}
+    for domain in domains:
+        action = domain_next_action(domain, has_mailbox=domain.id in with_mailbox)
+        if action is not None:
+            out[domain.name] = action
+    return out
+
+
 async def next_step(session: AsyncSession, base_url: str) -> NextStep:
     """The single most useful thing to do right now."""
     domains = (await session.execute(select(Domain))).scalars().all()
@@ -64,55 +167,22 @@ async def next_step(session: AsyncSession, base_url: str) -> NextStep:
             link_label="Add one",
         )
 
-    ready = [d for d in domains if d.status is DomainStatus.READY]
-    verified = [d for d in domains if d.status is DomainStatus.VERIFIED]
-    unpublished = [
-        d
-        for d in domains
-        if d.status
-        in (DomainStatus.ADDED, DomainStatus.DNS_INCOMPLETE, DomainStatus.OWNERSHIP_PENDING)
-    ]
-
-    if not ready and unpublished:
-        d = unpublished[0]
-        return NextStep(
-            title=f"Publish DNS records for {d.name}",
-            why=(
-                "Receiving servers check DNS to confirm you are allowed to send "
-                "as this domain. Until those records resolve, mail would be "
-                "rejected or land in spam, so emaild will not send at all."
-            ),
-            href="/domains",
-            link_label="See the exact records",
-        )
+    # Any domain that still needs something, whether or not others are already
+    # sending. The `not ready` guards this used to carry meant the guidance
+    # switched itself off permanently the moment one domain worked.
+    with_mailbox = set(
+        (await session.execute(select(Mailbox.domain_id).where(Mailbox.active))).scalars().all()
+    )
+    for domain in sorted(domains, key=lambda d: d.name):
+        action = domain_next_action(domain, has_mailbox=domain.id in with_mailbox)
+        if action is not None:
+            # Point at the page that shows the records and the re-check button,
+            # unless the step is a command to run on the server.
+            if action.command is None and action.href is None:
+                action.href, action.link_label = "/domains", "Open domains"
+            return action
 
     mailbox_count = (await session.execute(select(func.count(Mailbox.id)))).scalar_one()
-
-    if not ready and verified:
-        d = verified[0]
-        if mailbox_count == 0:
-            return NextStep(
-                title=f"Create a sender identity on {d.name}",
-                why=(
-                    "DNS is complete. A sender identity is one real address like "
-                    "noreply@" + d.name + " — it is an actual mailbox with its own "
-                    "400-per-hour budget, and it must exist before anything can send. "
-                    "Provisioning it needs the MXRoute credential, so it runs on the server."
-                ),
-                command=f"appctl admin mailboxes provision noreply@{d.name}",
-            )
-        # Mailboxes exist but the domain was verified before they did, and
-        # nothing recomputed it. Provisioning promotes the domain now, so this
-        # only appears on installations that predate that fix.
-        return NextStep(
-            title=f"Re-check {d.name}",
-            why=(
-                "The domain has a sender identity but is still marked verified "
-                "rather than ready. One re-check promotes it."
-            ),
-            href="/domains",
-            link_label="Re-check it",
-        )
 
     if mailbox_count == 0:
         return NextStep(
@@ -122,7 +192,7 @@ async def next_step(session: AsyncSession, base_url: str) -> NextStep:
                 "It is an actual mailbox with its own 400-per-hour budget, and mail "
                 "can only be sent from one that exists."
             ),
-            command="appctl admin mailboxes provision noreply@yourdomain.com",
+            command="./appctl admin mailboxes provision noreply@yourdomain.com",
         )
 
     project_count = (await session.execute(select(func.count(Project.id)))).scalar_one()

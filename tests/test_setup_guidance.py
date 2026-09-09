@@ -17,7 +17,7 @@ import os
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from emaild.dashboard.setup_state import next_step
+from emaild.dashboard.setup_state import domain_actions, domain_next_action, next_step
 from emaild.models import (
     ApiKey,
     Base,
@@ -196,4 +196,116 @@ async def test_mailbox_provisioning_still_carries_a_command(session):
     it elsewhere" without saying how is where the friction was."""
     await _domain(session, DomainStatus.VERIFIED)
     step = await next_step(session, BASE)
-    assert step.command and step.command.startswith("appctl admin mailboxes provision")
+    # "./appctl", not "appctl": the binary is not on PATH, and a pasted bare
+    # `appctl` answers "command not found" -- which reads as a broken install
+    # rather than a wrong prefix. The docs have always used ./appctl.
+    assert step.command and step.command.startswith("./appctl admin mailboxes provision")
+
+
+# --- guidance for a domain added to a WORKING installation -----------------
+#
+# The failure these exist for: every branch of next_step used to be guarded on
+# `not ready`, so the guidance switched itself off permanently once one domain
+# started sending. The operator who added a second domain months later saw
+# "Ready to send" on the overview while the new domain sat at `verified`, and
+# had nothing anywhere naming the step that would finish it.
+#
+# That is the case that matters more, not less: on the first run you are
+# following instructions; by the second you have forgotten the vocabulary.
+
+
+async def _ready_and_sending(session) -> Domain:
+    """A complete, working installation -- the state that used to silence
+    every remaining hint."""
+    d = await _domain(session, DomainStatus.READY)
+    m = await _mailbox(session, d)
+    project = Project(name="app", active=True)
+    session.add(project)
+    await session.flush()
+    session.add(ApiKey(project_id=project.id, name="k", key_hash="h", key_prefix="em_live_abc123"))
+    session.add(
+        Message(
+            public_id="email_01WORKINGWORKINGWORKINGWO",
+            project_id=project.id,
+            mailbox_id=m.id,
+            from_address=m.address,
+            to_addresses=["someone@example.net"],
+        )
+    )
+    await session.flush()
+    return d
+
+
+async def _second_domain(session, status: DomainStatus) -> Domain:
+    d = Domain(name="newdomain.com", status=status)
+    session.add(d)
+    await session.flush()
+    return d
+
+
+async def test_a_verified_second_domain_is_not_hidden_by_a_working_first(session):
+    """The exact reported failure."""
+    await _ready_and_sending(session)
+    await _second_domain(session, DomainStatus.VERIFIED)
+
+    step = await next_step(session, BASE)
+    assert not step.done
+    assert "newdomain.com" in step.title
+    assert step.command == "./appctl admin mailboxes provision noreply@newdomain.com"
+
+
+async def test_an_unpublished_second_domain_is_not_hidden_either(session):
+    await _ready_and_sending(session)
+    await _second_domain(session, DomainStatus.DNS_INCOMPLETE)
+
+    step = await next_step(session, BASE)
+    assert "newdomain.com" in step.title
+    assert step.href == "/domains"
+
+
+async def test_a_working_installation_with_nothing_pending_still_says_ready(session):
+    """The fix must not turn the panel into a permanent nag."""
+    await _ready_and_sending(session)
+    step = await next_step(session, BASE)
+    assert step.done
+
+
+# --- the per-domain decision the domains page renders ----------------------
+
+
+async def test_a_ready_domain_needs_nothing(session):
+    d = await _domain(session, DomainStatus.READY)
+    assert domain_next_action(d, has_mailbox=True) is None
+
+
+async def test_a_verified_domain_without_a_mailbox_carries_the_command(session):
+    """The one step in the whole flow that cannot be done in the browser, so it
+    is the one that most needs the exact command rather than a concept."""
+    d = await _domain(session, DomainStatus.VERIFIED)
+    action = domain_next_action(d, has_mailbox=False)
+    assert action is not None
+    assert action.command == "./appctl admin mailboxes provision noreply@example.com"
+    assert "cannot be done here" in action.why
+
+
+async def test_a_verified_domain_that_has_a_mailbox_asks_for_a_recheck(session):
+    d = await _domain(session, DomainStatus.VERIFIED)
+    action = domain_next_action(d, has_mailbox=True)
+    assert action is not None
+    assert "Re-check" in action.title
+
+
+async def test_a_misconfigured_domain_says_dns_changed_outside_emaild(session):
+    d = await _domain(session, DomainStatus.MISCONFIGURED)
+    action = domain_next_action(d, has_mailbox=True)
+    assert action is not None
+    assert "outside emaild" in action.why
+
+
+async def test_domain_actions_keys_by_name_and_omits_ready_ones(session):
+    ready = await _domain(session, DomainStatus.READY)
+    await _mailbox(session, ready)
+    await _second_domain(session, DomainStatus.VERIFIED)
+
+    actions = await domain_actions(session)
+    assert set(actions) == {"newdomain.com"}

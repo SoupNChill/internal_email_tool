@@ -220,7 +220,7 @@ async def blocked_senders(session: AsyncSession) -> list[Blocked]:
                     subject=mailbox.address,
                     reason="This sender identity is deactivated.",
                     fix="Re-provision it.",
-                    command=f"appctl admin mailboxes provision {mailbox.address}",
+                    command=f"./appctl admin mailboxes provision {mailbox.address}",
                 )
             )
             continue
@@ -269,7 +269,7 @@ async def blocked_senders(session: AsyncSession) -> list[Blocked]:
                 subject=domain.name,
                 reason=reason,
                 fix="Provision one on the server — it needs the MXRoute credential.",
-                command=f"appctl admin mailboxes provision noreply@{domain.name}",
+                command=f"./appctl admin mailboxes provision noreply@{domain.name}",
             )
         )
 

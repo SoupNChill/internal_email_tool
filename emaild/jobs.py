@@ -30,7 +30,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from emaild.domains import add_domain, refresh_domain
+from emaild.domains import add_domain, add_failure_message, refresh_domain
 from emaild.models import Domain, JobStatus, JobType, ProvisioningJob
 from emaild.providers.mxroute import MXRouteClient, MXRouteError
 
@@ -201,7 +201,21 @@ async def run_one(session: AsyncSession, client: MXRouteClient) -> bool:
         # Expected failures: a bad domain, a provider refusal. Recorded on the
         # job so the requester sees why, rather than a row that silently
         # stopped.
+        #
+        # For a failed add, the provider's own message is recorded AND
+        # explained. MXRoute answers a first-time domain with "add a TXT record
+        # to prove ownership, use the panel at panel.mxroute.com to see it" --
+        # accurate, and it sends the operator to another product to look up a
+        # record this one can fetch. The advice was already written; it was
+        # simply wired to the CLI only, so the dashboard showed the raw string.
         job.result = str(exc)
+        # Only a PROVIDER failure gets provider advice. A JobError is ours --
+        # a malformed domain name, an untracked domain -- and already says
+        # exactly what is wrong; appending an ownership record to it would be
+        # the original bug wearing a new hat.
+        if job.job_type is JobType.ADD_DOMAIN and isinstance(exc, MXRouteError):
+            domain = str((job.payload or {}).get("domain", ""))
+            job.result = f"{exc}\n\n{await add_failure_message(client, exc, domain)}"
         job.status = JobStatus.FAILED
         log.warning("job %s failed: %s", job.id, exc)
     except Exception as exc:  # noqa: BLE001

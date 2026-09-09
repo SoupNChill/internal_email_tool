@@ -44,7 +44,7 @@ from emaild.config import get_settings
 from emaild.dashboard import csrf
 from emaild.dashboard.auth import check_dashboard_auth
 from emaild.dashboard.forms import many, one, parse_form, stash, take
-from emaild.dashboard.setup_state import next_step
+from emaild.dashboard.setup_state import domain_actions, next_step
 from emaild.dashboard.testsend import (
     SendRefused,
     blocked_senders,
@@ -406,11 +406,15 @@ async def domains(request: Request) -> Response:
             }
             for j in await recent(session, limit=8)
         ]
+        # What each domain still needs, rendered beside it. An operator who
+        # knows they are working on domains comes here; the answer has to be
+        # here too, not only on the overview.
+        actions = await domain_actions(session)
 
     return templates.TemplateResponse(
         request,
         "domains.html",
-        {**_base(request, "domains"), "domains": view, "jobs": jobs},
+        {**_base(request, "domains"), "domains": view, "jobs": jobs, "actions": actions},
     )
 
 
